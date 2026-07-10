@@ -34,6 +34,12 @@ These appear in the original product vision but are **not fixed**. Treat as dire
 - **Ready to compile** against the PlatformIO config above.
 - Register-level IMU work goes through small, named helpers (`writeRegister`/`readRegister` over `Wire`); keep magic numbers explained inline.
 
+## Engineering Principles
+
+- **Keep It Stupid Simple (KISS):** the smallest thing that works wins; resist cleverness and premature structure.
+- **Don't Repeat Yourself (DRY):** extract shared logic once behind a clear seam; never copy-paste across modules.
+- **Ponytail-style restraint:** before writing code, stop at the first rung that holds — *needed at all? already here? in the standard library? a native platform feature? an installed dependency? one line?* Only then write the minimum. **Delete over add**, fewest files, shortest working diff; no abstractions or dependencies nobody asked for. Laziness applies to complexity, never to correctness, safety, or hardware calibration.
+
 ## Repository Infrastructure & Architecture Guardrails
 
 ### Git & Branching Strategy
@@ -45,7 +51,7 @@ These appear in the original product vision but are **not fixed**. Treat as dire
 ### Build Pipelines
 
 - Always use `pio run` to verify compilation sanity before packaging a commit.
-- Target upload architecture remains constrained to standard Mbed OS targets.
+- Build target is fixed to the RP2040 / Raspberry Pi Pico-SDK toolchain (`platform = raspberrypi`); do not switch frameworks.
 
 ## Engineering standards & workflows
 
