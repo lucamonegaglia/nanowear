@@ -1,0 +1,189 @@
+#include <unity.h>
+#include "pedometer.h"
+#include "imu.h"
+#include "step_codec.h"
+#include "elapsed_timer.h"
+#include "state_machine.h"
+
+// ---------------------------------------------------------------------------
+// NanoWear host test suite (single binary; PlatformIO links all test/*.cpp
+// flat into one program, so there is exactly ONE setUp/tearDown here).
+//
+// NOTE: this environment's `native` + Unity setup does not auto-generate the
+// test runner `main()`, so we provide one explicitly with UNITY_BEGIN /
+// RUN_TEST / UNITY_END. Add new RUN_TEST(...) lines as tests grow.
+//
+// Coverage:
+//   * step_codec    — little-endian step-byte assembly
+//   * elapsed_timer — non-blocking interval boundary
+//   * pedometer     — total/delta accumulation (MockIMU), + simulated e2e loop
+//   * state_machine — BOOT→LOGGING→SYNC / LOW_BATTERY transitions
+// ---------------------------------------------------------------------------
+
+static MockIMU mock;
+static Pedometer pedo(mock);
+static StateMachine sm(2000);
+
+void setUp(void) {
+    mock = MockIMU();        // reset the sensor double
+    pedo.reset();            // clear step accumulator
+    sm = StateMachine(2000); // back to BOOT, 2s poll
+}
+
+void tearDown(void) {}
+
+// --- step_codec -------------------------------------------------------------
+void test_combine_low_and_high(void) {
+    TEST_ASSERT_EQUAL_UINT16(0x1234, combineStepBytes(0x34, 0x12));
+}
+void test_combine_zero(void) {
+    TEST_ASSERT_EQUAL_UINT16(0x0000, combineStepBytes(0x00, 0x00));
+}
+void test_combine_max(void) {
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, combineStepBytes(0xFF, 0xFF));
+}
+void test_combine_low_only(void) {
+    TEST_ASSERT_EQUAL_UINT16(0x00FF, combineStepBytes(0xFF, 0x00));
+}
+void test_combine_high_only(void) {
+    TEST_ASSERT_EQUAL_UINT16(0xFF00, combineStepBytes(0x00, 0xFF));
+}
+
+// --- elapsed_timer ----------------------------------------------------------
+void test_timer_not_elapsed_before_interval(void) {
+    ElapsedTimer t(2000); t.reset(1000);
+    TEST_ASSERT_FALSE(t.hasElapsed(1000));
+    TEST_ASSERT_FALSE(t.hasElapsed(2999));
+}
+void test_timer_elapsed_exactly_at_interval(void) {
+    ElapsedTimer t(2000); t.reset(1000);
+    TEST_ASSERT_TRUE(t.hasElapsed(3000));
+}
+void test_timer_elapsed_after_interval(void) {
+    ElapsedTimer t(2000); t.reset(1000);
+    TEST_ASSERT_TRUE(t.hasElapsed(3001));
+}
+void test_timer_reset_restarts(void) {
+    ElapsedTimer t(2000); t.reset(0);
+    TEST_ASSERT_TRUE(t.hasElapsed(2000));
+    t.reset(2000);
+    TEST_ASSERT_FALSE(t.hasElapsed(2000));
+    TEST_ASSERT_TRUE(t.hasElapsed(4000));
+}
+void test_timer_reports_duration(void) {
+    ElapsedTimer t(2000); t.reset(500);
+    TEST_ASSERT_EQUAL_UINT32(2500, t.elapsed(3000));
+}
+
+// --- pedometer --------------------------------------------------------------
+void test_pedometer_initial_total_zero(void) {
+    TEST_ASSERT_EQUAL_UINT16(0, pedo.getTotal());
+}
+void test_pedometer_first_update(void) {
+    mock.stepCount = 100;
+    TEST_ASSERT_EQUAL_UINT16(100, pedo.update());
+    TEST_ASSERT_EQUAL_UINT16(100, pedo.getTotal());
+}
+void test_pedometer_accumulates(void) {
+    mock.stepCount = 50; pedo.update();
+    mock.stepCount = 120;
+    TEST_ASSERT_EQUAL_UINT16(70, pedo.update());
+    TEST_ASSERT_EQUAL_UINT16(120, pedo.getTotal());
+}
+void test_pedometer_no_change_zero_delta(void) {
+    mock.stepCount = 80; pedo.update();
+    TEST_ASSERT_EQUAL_UINT16(0, pedo.update());
+    TEST_ASSERT_EQUAL_UINT16(80, pedo.getTotal());
+}
+void test_pedometer_reset(void) {
+    mock.stepCount = 500; pedo.update();
+    pedo.reset();
+    TEST_ASSERT_EQUAL_UINT16(0, pedo.getTotal());
+}
+void test_pedometer_delta_clamped_backwards(void) {
+    mock.stepCount = 200; pedo.update();
+    mock.stepCount = 150;
+    TEST_ASSERT_EQUAL_UINT16(0, pedo.update());
+    TEST_ASSERT_EQUAL_UINT16(150, pedo.getTotal());
+}
+// Simulated end-to-end: what loop() does every 2 seconds.
+void test_pedometer_e2e_loop_simulation(void) {
+    const uint16_t readings[] = {0, 25, 25, 60, 130, 130, 131};
+    const uint16_t totals[]   = {0, 25, 25, 60, 130, 130, 131};
+    const uint16_t deltas[]   = {0, 25, 0, 35, 70, 0, 1};
+    const int n = sizeof(readings) / sizeof(readings[0]);
+    for (int i = 0; i < n; i++) {
+        mock.stepCount = readings[i];
+        uint16_t delta = pedo.update();
+        TEST_ASSERT_EQUAL_UINT16(totals[i], pedo.getTotal());
+        TEST_ASSERT_EQUAL_UINT16(deltas[i], delta);
+    }
+    TEST_ASSERT_EQUAL_UINT16(131, pedo.getTotal());
+}
+
+// --- state_machine ----------------------------------------------------------
+void test_sm_starts_in_boot(void) {
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::BOOT, (uint8_t)sm.state());
+    TEST_ASSERT_FALSE(sm.shouldPoll(0));
+    TEST_ASSERT_FALSE(sm.shouldPoll(100000));
+}
+void test_sm_boot_complete_enters_logging(void) {
+    sm.onBootComplete(1000);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::LOGGING, (uint8_t)sm.state());
+    TEST_ASSERT_FALSE(sm.shouldPoll(1000));
+    TEST_ASSERT_FALSE(sm.shouldPoll(2999));
+    TEST_ASSERT_TRUE(sm.shouldPoll(3000));
+}
+void test_sm_poll_rearm(void) {
+    sm.onBootComplete(0);
+    TEST_ASSERT_TRUE(sm.shouldPoll(2000));
+    sm.markPolled(2000);
+    TEST_ASSERT_FALSE(sm.shouldPoll(2000));
+    TEST_ASSERT_TRUE(sm.shouldPoll(4000));
+}
+void test_sm_sync_cycle(void) {
+    sm.onBootComplete(0);
+    sm.requestSync();
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::SYNC, (uint8_t)sm.state());
+    TEST_ASSERT_FALSE(sm.shouldPoll(99999));
+    sm.syncComplete(5000);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::LOGGING, (uint8_t)sm.state());
+    TEST_ASSERT_TRUE(sm.shouldPoll(7000));
+}
+void test_sm_low_battery_and_recover(void) {
+    sm.onBootComplete(0);
+    sm.enterLowBattery();
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::LOW_BATTERY, (uint8_t)sm.state());
+    TEST_ASSERT_FALSE(sm.shouldPoll(99999));
+    sm.recover(10);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::LOGGING, (uint8_t)sm.state());
+    TEST_ASSERT_TRUE(sm.shouldPoll(2010));
+}
+
+// --- explicit runner (auto-runner not generated in this env) ----------------
+int main(void) {
+    UNITY_BEGIN();
+    RUN_TEST(test_combine_low_and_high);
+    RUN_TEST(test_combine_zero);
+    RUN_TEST(test_combine_max);
+    RUN_TEST(test_combine_low_only);
+    RUN_TEST(test_combine_high_only);
+    RUN_TEST(test_timer_not_elapsed_before_interval);
+    RUN_TEST(test_timer_elapsed_exactly_at_interval);
+    RUN_TEST(test_timer_elapsed_after_interval);
+    RUN_TEST(test_timer_reset_restarts);
+    RUN_TEST(test_timer_reports_duration);
+    RUN_TEST(test_pedometer_initial_total_zero);
+    RUN_TEST(test_pedometer_first_update);
+    RUN_TEST(test_pedometer_accumulates);
+    RUN_TEST(test_pedometer_no_change_zero_delta);
+    RUN_TEST(test_pedometer_reset);
+    RUN_TEST(test_pedometer_delta_clamped_backwards);
+    RUN_TEST(test_pedometer_e2e_loop_simulation);
+    RUN_TEST(test_sm_starts_in_boot);
+    RUN_TEST(test_sm_boot_complete_enters_logging);
+    RUN_TEST(test_sm_poll_rearm);
+    RUN_TEST(test_sm_sync_cycle);
+    RUN_TEST(test_sm_low_battery_and_recover);
+    return UNITY_END();
+}
