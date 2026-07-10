@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 class Pedometer {
 public:
-    explicit Pedometer(IMUSensor& imu) : imu(imu) {}
+    explicit Pedometer(IMU& imu) : imu(imu) {}
 
     // Reset cumulative state (e.g. right after the IMU's PEDO_RST_STEP command).
     void reset() { total = 0; }
@@ -36,7 +36,7 @@ public:
     uint16_t getTotal() const { return total; }
 
 private:
-    IMUSensor& imu;
+    IMU& imu;
     uint16_t total = 0;
 };
 

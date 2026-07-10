@@ -11,19 +11,13 @@
 // interface, which lets the step-counting logic be unit-tested on the host
 // (native env) using a fake implementation instead of real I2C hardware.
 //
-// NOTE: the class is deliberately named IMUSensor (not IMU) to avoid colliding
-// with the `IMU` macro that Arduino_LSM6DSOX.h #defines to its global object
-// (`#define IMU IMU_LSM6DSOX`). That macro would otherwise rewrite every
-// `class IMU` / `IMU&` token in the board build into `IMU_LSM6DSOX`, breaking
-// compilation. The name also keeps the test double MockIMU unambiguous.
-//
 // The production implementation (HardwareIMU) lives in hardware_imu.cpp and is
 // compiled only for the board. A test double (MockIMU) is provided below so
 // native tests stay hardware-free and deterministic.
 // ---------------------------------------------------------------------------
-class IMUSensor {
+class IMU {
 public:
-    virtual ~IMUSensor() = default;
+    virtual ~IMU() = default;
 
     // Initialize the sensor. Returns true on success.
     virtual bool begin() = 0;
@@ -45,7 +39,7 @@ public:
 // Records calls and returns scripted values. Tests assign `stepCount` and
 // assert on the call counters; no real hardware is touched.
 // ---------------------------------------------------------------------------
-class MockIMU : public IMUSensor {
+class MockIMU : public IMU {
 public:
     bool beginCalled = false;
     bool beginResult = true;
