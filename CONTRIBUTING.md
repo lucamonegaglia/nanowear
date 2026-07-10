@@ -100,13 +100,15 @@ Rules: file `test_*.cpp`; functions `test_*`; optional `setUp()`/`tearDown()`;
 assert with `TEST_ASSERT_*`; script sensor behaviour via `MockStepSensor`
 (never real I2C in host tests).
 
-> **Native harness note:** `pio test -e native` compiles all testable logic
-> cleanly. On this PlatformIO/Unity version the bundled `libUnity.a` does
-> not emit a `main` runner for the `native` env, so the link step fails
-> with `undefined reference to main`. The authoritative compilation-sanity
-> gate is therefore `pio run -e nanorp2040connect` (the board firmware
-> build), which must stay green. Revisit the native harness when the
-> PlatformIO/Unity combo is upgraded.
+> **Native harness note:** `pio test -e native` runs the full host suite
+> (17 unit + simulated-e2e cases) and must stay green in CI. PlatformIO's
+> `pio test` does **not** emit a Unity test runner (the `main` that calls
+> `RUN_TEST`) for `platform = native` in this toolchain version, so the link
+> step would fail with `undefined reference to main`. The runner is supplied
+> explicitly in `test/main.cpp`; the board-only `HardwareIMU`/`main.cpp` are
+> excluded from the native build, so the three pure-logic modules
+> (`pedometer`, `elapsed_timer`, `step_codec`) plus `imu.h`/`MockStepSensor`
+> are what get exercised.
 
 ## CI
 
