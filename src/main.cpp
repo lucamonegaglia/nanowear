@@ -1,110 +1,64 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <Arduino_LSM6DSOX.h>
+#include "hardware_imu.h"
+#include "pedometer.h"
+#include "elapsed_timer.h"
+#include "state_machine.h"
 
-// LSM6DSOX I2C Device Address
-#define LSM6DSOX_I2C_ADDR      0x6A
+// ---------------------------------------------------------------------------
+// NanoWear firmware — screenless ankle-worn fitness tracker
+// ---------------------------------------------------------------------------
+// Architecture (see CLAUDE.md / AGENTS.md / ROADMAP.md):
+//   * Non-blocking: loop() never calls delay(); polling is driven by the
+//     StateMachine + ElapsedTimer so the MCU stays free for sleep / BLE.
+//   * Testable: step logic lives in Pedometer (pure) behind the IMU interface;
+//     the board-only HardwareIMU is the only part that touches I2C. The
+//     StateMachine is also pure, so the orchestration is host-testable.
+//   * Current scope (just the board, USB-powered): BOOT -> LOGGING. SYNC and
+//     LOW_BATTERY are wired but entered only by future BLE / power code.
+// ---------------------------------------------------------------------------
 
-// Embedded Functions Register Map
-#define FUNC_CFG_ACCESS        0x01
-#define EMB_FUNC_EN_A          0x04
-#define EMB_FUNC_EXEC_STATUS   0x07
-#define PEDO_CMD_REG           0x83
-#define INT1_CTRL              0x0D
-#define EMB_FUNC_INT1          0x0A
-
-// Step Register Offsets (Page 0 of Embedded Advanced Registers)
-#define STEP_COUNTER_L         0x4B
-#define STEP_COUNTER_H         0x4C
-
-// Helper function to write directly to low-level IMU registers
-void writeRegister(uint8_t reg, uint8_t val) {
-    Wire.beginTransmission(LSM6DSOX_I2C_ADDR);
-    Wire.write(reg);
-    Wire.write(val);
-    Wire.endTransmission();
-}
-
-// Helper function to read from low-level IMU registers
-uint8_t readRegister(uint8_t reg) {
-    Wire.beginTransmission(LSM6DSOX_I2C_ADDR);
-    Wire.write(reg);
-    Wire.endTransmission();
-    Wire.requestFrom(LSM6DSOX_I2C_ADDR, (uint8_t)1);
-    return Wire.available() ? Wire.read() : 0;
-}
-
-void initHardwarePedometer() {
-    // 1. Enable access to Embedded Functions Configuration Register bank
-    writeRegister(FUNC_CFG_ACCESS, 0x80); 
-
-    // 2. Turn on the pedometer algorithm within the embedded processor core
-    writeRegister(EMB_FUNC_EN_A, 0x08); // Set PEDO_EN bit
-
-    // 3. Reset step count baseline to 0
-    writeRegister(PEDO_CMD_REG, 0x04); // Set PEDO_RST_STEP bit
-
-    // 4. Disable access to Embedded Functions to return to normal register operations
-    writeRegister(FUNC_CFG_ACCESS, 0x00);
-
-    // 5. Route pedometer step detection event interrupts natively to INT1
-    writeRegister(FUNC_CFG_ACCESS, 0x40); // Access advanced interrupts page
-    writeRegister(EMB_FUNC_INT1, 0x08);   // Route INT1_STEP_DET detector
-    writeRegister(FUNC_CFG_ACCESS, 0x00); // Return to default page
-
-    Serial.println("LSM6DSOX Embedded Pedometer Engine Configured.");
-}
-
-uint16_t getHardwareStepCount() {
-    uint8_t lowByte, highByte;
-
-    // Open functional register access to read computed metrics
-    writeRegister(FUNC_CFG_ACCESS, 0x80);
-    
-    lowByte  = readRegister(STEP_COUNTER_L);
-    highByte = readRegister(STEP_COUNTER_H);
-    
-    // Close functional register access
-    writeRegister(FUNC_CFG_ACCESS, 0x00);
-
-    return (uint16_t)((highByte << 8) | lowByte);
-}
+static HardwareIMU imu;
+static Pedometer pedometer(imu);
+static StateMachine tracker(2000); // poll the isolated HW counter every 2s while LOGGING
 
 void setup() {
     Serial.begin(115200);
-    
-    // Initialize standard Arduino wire architecture
+
+    // Standard Arduino Wire bus.
     Wire.begin();
 
-    // Verify sensor presence via high-level layer
-    if (!IMU.begin()) {
+    // Verify sensor presence via the high-level layer.
+    if (!imu.begin()) {
         Serial.println("Critical Error: Failed to find LSM6DSOX.");
-        while (1);
+        while (1); // halt; no recovery path on this prototype
     }
 
-    // Over-write sensor subsystems to boot the hardware pedometer engine
-    initHardwarePedometer();
+    // Boot the hardware pedometer engine, then clear our accumulator.
+    imu.initHardwarePedometer();
+    pedometer.reset();
+
+    // BOOT -> LOGGING.
+    tracker.onBootComplete(millis());
+    Serial.println("[STATE] BOOT complete -> LOGGING");
 }
 
 void loop() {
-    static unsigned long lastMetricsPoll = 0;
-    static uint16_t cumulativeSteps = 0;
+    unsigned long now = millis();
 
-    unsigned long currentMillis = millis();
+    // Power-optimised, non-blocking poll: act only when LOGGING and the 2s
+    // window has elapsed.
+    if (tracker.shouldPoll(now)) {
+        tracker.markPolled(now);
 
-    
-    // Poll the isolated hardware counter every 2 seconds (Power Optimised)
-    if (currentMillis - lastMetricsPoll >= 2000) {
-        lastMetricsPoll = currentMillis;
-        
-        uint16_t hardwareSteps = getHardwareStepCount();
-        Serial.print("[PEDOMETER ACTIVATED] Dynamic hardware Steps: ");
-        Serial.println(hardwareSteps);
+        uint16_t delta = pedometer.update();
+        uint16_t total = pedometer.getTotal();
 
-        if (hardwareSteps != cumulativeSteps) {
-            cumulativeSteps = hardwareSteps;
-            Serial.print("[PEDOMETER ACTIVATED] Dynamic Total Steps: ");
-            Serial.println(cumulativeSteps);
+        Serial.print("[PEDOMETER] Total steps: ");
+        Serial.println(total);
+
+        if (delta > 0) {
+            Serial.print("[PEDOMETER] New steps this poll: ");
+            Serial.println(delta);
         }
     }
 }
