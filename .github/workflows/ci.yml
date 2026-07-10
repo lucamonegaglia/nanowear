@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade pip platformio
+
+      # 1) Firmware must compile for the real board (catches I2C / Arduino API
+      #    regressions even though we cannot flash in CI).
+      - name: Build firmware (Nano RP2040 Connect)
+        run: pio run -e nanorp2040connect
+
+      # 2) Host unit + simulated end-to-end tests (no board required).
+      - name: Run native unit tests
+        run: pio test -e native
+
+      # Hardware end-to-end (flash + serial check on the physical board) is
+      # intentionally NOT here: CI has no device attached. Enable it on a
+      # self-hosted runner when one is available.
