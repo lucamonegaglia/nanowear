@@ -1,7 +1,10 @@
 # NanoWear — Hardware & Software Roadmap
 
 > Screenless, ankle-worn fitness tracker on the **Arduino Nano RP2040 Connect**.
-> Goal: track steps (and eventually route to **Strava**) and **connect easily with a phone**.
+> Goal: the **wearable** logs steps **and its own GPS track** on-device (and eventually
+> routes to **Strava**). A phone is used **only as an interface** to the wearable — to
+> fetch logged data or trigger a sync. The phone is **not** a pedometer, **not** a
+> fitness device, and **never** supplies GPS; all sensing lives on the ankle unit.
 > Written as a planning document — the board is the only hard constraint; everything
 > else below is a *recommendation* to be confirmed when you're back at the keyboard.
 
@@ -11,7 +14,9 @@
 
 Make the device a **Bluetooth Low Energy (BLE) peripheral** that advertises the
 **standard Running Speed and Cadence (RSC) GATT service (UUID `0x1814`)** defined by
-the Bluetooth SIG. The phone becomes the GPS source, the display, and the Strava bridge.
+the Bluetooth SIG. The wearable carries its **own external GPS module**; the phone is
+used **only as a display/interface and the Strava upload bridge** — never as a
+pedometer, fitness device, or GPS source.
 
 Why this is the right call:
 
@@ -19,11 +24,13 @@ Why this is the right call:
   ≥ 2.0.0) and can run it **simultaneously with Wi-Fi** over SPI — no custom ESP32
   firmware, no GPIO/jTAG hacks. This was the single biggest blocker and it's gone.
 - RSC is a *standard* profile. Any app that supports BLE fitness sensors (including
-  open-source ones below) pairs with the device **with zero custom app code** for the MVP.
-- The phone already has a far better GPS, a screen, and an internet connection.
-  Offloading GPS + Strava OAuth to the phone keeps the ankle unit simple, cheap, and
-  low-power — which is the whole point of "screenless."
-- Strava upload is handled by the **phone app**, so the device never touches OAuth/tokens.
+  open-source ones below) pairs with the device **with zero custom app code** for the
+  MVP and shows live steps/cadence as a display.
+- **GPS lives on the wearable**, not the phone. An external micro I2C GPS module
+  (**PA1010D** / **SAM-M8Q**) is wired to the board, so the device logs position
+  independently of any phone — the phone is therefore never a pedometer or GPS source.
+- Strava upload is still handled by the **phone app**, so the device never touches
+  OAuth/tokens — keeping the ankle unit simple, cheap, and low-power.
 
 **MVP phone app (pick one, both are open source):**
 - **RunnerUp** (GPL v3, F-Droid `org.runnerup.free`) — built-in **Strava sync**, BLE +
@@ -31,7 +38,9 @@ Why this is the right call:
 - **OpenTracks** (privacy-first, Codeberg) — robust **GPX 1.1 export**, BLE running
   speed/cadence, no cloud. Best if you want local-first / privacy.
 
-Both read a BLE RSC foot-pod natively. No custom app required to ship v1.
+Both read a BLE RSC foot-pod natively (live steps/cadence); for upload they pull the
+**device-built GPX** (steps fused with the wearable's own GPS) rather than supplying
+any GPS of their own. No custom app required to ship v1.
 
 ---
 
@@ -67,16 +76,17 @@ Both read a BLE RSC foot-pod natively. No custom app required to ship v1.
   or buck for the 3.7→3.3 V step, mindful of quiescent current for sleep.
 - **Fuel/Battery monitoring:** a divider on a spare ADC pin, or a **MAX17048** fuel gauge.
 
-### H2 — GPS decision (recommend: phone-GPS for MVP)
-Two valid paths; pick per §5.
+### H2 — GPS module (external, wired to the board — not on the phone)
+Per `AGENTS.md`, GPS is an **external micro I2C module wired to the board** — the phone
+never supplies GPS. Two module choices; both are onboard, neither involves the phone:
 
-- **(Recommended, MVP) Phone-GPS bridge:** the ankle unit sends only steps/cadence
-  over BLE; the **phone supplies GPS** and builds the track. Zero extra hardware,
-  best battery life, simplest enclosure. This is the dominant "easy connect" pattern.
-- **(Standalone) Onboard micro-GPS:** add a tiny I2C GPS — **PA1010D** (MiniGPS,
-  ~10 mA) or **SAM-M8Q** (better sensitivity, more power). Wired in `platformio.ini`
-  already (`TinyGPSPlus`). Adds cost, antenna, and power budget; needed only if you
-  want truly phone-free logging.
+- **PA1010D** (MiniGPS, ~10 mA) — smaller, lower-power; good default.
+- **SAM-M8Q** (better sensitivity, more power) — stronger fix in tough RF / tree cover.
+
+`TinyGPSPlus` is already wired in `platformio.ini`. Adds cost, antenna, and power
+budget versus a phone-less design, but keeps the wearable fully independent of any
+phone for position — which is the point of this product. (The earlier "phone-GPS
+bridge" idea is dropped: the phone is only an interface, never a sensor.)
 
 ### H3 — Ankle enclosure & wearability
 - 3D-printed or molded **above-ankle strap** enclosure; secure the IMU against the
@@ -91,10 +101,12 @@ Two valid paths; pick per §5.
 - Keep the **RGB status LED** as the primary at-a-glance state (paired / logging /
   low-battery) — already wired via NINA.
 
-### H5 — Offline storage (only if going standalone)
-- Use the onboard **16 MB flash** to buffer `.gpx`-structured files when no phone is
-  in range; flush to the phone on reconnect. Approach still unvalidated (§5).
-- If MVP is phone-GPS, the phone *is* the store — skip H5 initially.
+### H5 — Offline storage (required — the wearable logs on its own)
+- Use the onboard **16 MB flash** to buffer `.gpx`-structured files (steps fused with
+  the wearable's own GPS) when no phone is in range; flush to the phone on reconnect.
+  Approach still unvalidated (§6).
+- Because GPS lives on the wearable, the device must store its own track — there is no
+  phone to fall back on for position, so H5 is in scope from the start.
 
 ### H6 — Integrate / miniaturize
 - Move from dev board to a compact custom PCB or a tightly routed protoboard; BOM
@@ -138,25 +150,29 @@ Two valid paths; pick per §5.
 - Schedule BLE advertising bursts; keep NINA asleep between.
 - Tune toward the 80–90 mA active / minimal idle target.
 
-### S4 — Offline buffering + sync (if standalone, H5)
-- Write steps/GPS to flash as rolling `.gpx`/CSV when no phone; on BLE reconnect,
-  stream the backlog to the app, then clear. Skip if MVP is phone-GPS.
+### S4 — Offline buffering + sync (H5)
+- Write steps + GPS to flash as rolling `.gpx`/CSV when no phone is in range; on BLE
+  reconnect, stream the backlog to the phone app, then clear. Always in scope now that
+  the wearable logs its own GPS track.
 
 ### S5 — BLE config & control channel
 - A small **Device Information / custom config service** over BLE:
   reset steps, set haptics-on-event, read battery %, OTA-friendly handshake.
 - Optional **OTA update** of the RP2040 sketch (skip until stable).
 
-### S6 — GPS integration / phone-GPS fusion
-- If onboard GPS (H2): read `TinyGPSPlus`, fuse with steps, build GPX on-device.
-- If phone-GPS (MVP): define a tiny BLE characteristic or use the phone app's own
-  recording; the device just streams cadence/steps.
+### S6 — GPS integration (onboard GPS + step fusion)
+- Read `TinyGPSPlus` from the external GPS module, fuse with the hardware step count,
+  and build the GPX track **on-device**. The phone is never the GPS source.
+- The BLE RSC channel still streams live cadence/steps to the phone as a display; the
+  full GPS track is delivered via the offline buffer (S4/H5) or a bulk transfer.
 
-### S7 — Strava path (device stays dumb)
-- **No OAuth on the device.** The phone app owns Strava:
+### S7 — Strava path (device logs, phone uploads)
+- **No OAuth on the device.** The phone app owns Strava and uploads the **device-built
+  GPX** (steps + the wearable's own GPS):
   - RunnerUp: native Strava upload.
   - OpenTracks: export GPX → import to Strava manually or via a sync companion.
-- Verify end-to-end: walk → BLE → phone app → Strava activity with correct steps.
+- Verify end-to-end: walk → wearable logs steps + GPS → phone fetches GPX → Strava
+  activity with correct steps **and** route.
 
 ---
 
@@ -164,10 +180,10 @@ Two valid paths; pick per §5.
 
 | App | License | Strava sync | BLE RSC | GPS | Notes |
 |---|---|---|---|---|---|
-| **RunnerUp** | GPL v3 | ✅ built-in | ✅ (BLE+ANT+) | phone | F-Droid `org.runnerup.free`; GPX/TCX export; no account needed. Best one-tap Strava. |
-| **OpenTracks** | Open (privacy) | ❌ (export only) | ✅ running speed/cadence | phone | Codeberg; GPX 1.1/KML/KMZ export; fully offline; Gadgetbridge integration. Best local-first. |
-| **Gadgetbridge** | GPL v3 | via export | ✅ extensible | phone | Generic device framework; could host a *custom* NanoWear integration for richer control (haptics, config). More work. |
-| **OsmAnd + OsmAnd Tracker** | GPL v3 | via export | plugin | phone | Turns phone into a tracker feeding OsmAnd; overkill unless you want OSM mapping. |
+| **RunnerUp** | GPL v3 | ✅ built-in | ✅ (BLE+ANT+) | device (wearable) | F-Droid `org.runnerup.free`; GPX/TCX export; no account needed. Best one-tap Strava. |
+| **OpenTracks** | Open (privacy) | ❌ (export only) | ✅ running speed/cadence | device (wearable) | Codeberg; GPX 1.1/KML/KMZ export; fully offline; Gadgetbridge integration. Best local-first. |
+| **Gadgetbridge** | GPL v3 | via export | ✅ extensible | device (wearable) | Generic device framework; could host a *custom* NanoWear integration for richer control (haptics, config). More work. |
+| **OsmAnd + OsmAnd Tracker** | GPL v3 | via export | plugin | device (wearable) | Phone is only a map *viewer* feeding OsmAnd; overkill unless you specifically want OSM mapping. |
 
 **Recommendation:** Ship MVP with **RunnerUp** (if Strava is the priority) or
 **OpenTracks** (if privacy/local is). Both are free, open source, and read a BLE RSC
@@ -177,9 +193,10 @@ foot-pod with no custom code.
 e.g. on-device GPS fusion, custom haptics cues, or a branded UI):
 - **Flutter** + `flutter_blue_plus` (Android/iOS from one codebase), or
 - **React Native** + `react-native-ble-plx`.
-- The app scans for the RSC service, reads cadence/steps, optionally merges phone GPS,
-  writes GPX, and uploads to Strava via the **Strava REST API** (OAuth on the phone).
-  This is more work than using RunnerUp/OpenTracks and is a fallback, not the MVP.
+- The app scans for the RSC service, reads live cadence/steps as a display, and pulls
+  the **device-built GPX** (steps fused with the wearable's own GPS), then uploads to
+  Strava via the **Strava REST API** (OAuth on the phone). The phone never contributes
+  GPS. This is more work than using RunnerUp/OpenTracks and is a fallback, not the MVP.
 
 ---
 
@@ -187,9 +204,9 @@ e.g. on-device GPS fusion, custom haptics cues, or a branded UI):
 
 1. **Connectivity:** BLE RSC peripheral (recommended) vs Wi-Fi-direct HTTP POST to
    Strava. → **BLE RSC**, because it's standard, low-power, and needs no custom app.
-2. **GPS source:** phone-GPS bridge (recommended for MVP) vs onboard micro-GPS
-   (PA1010D/SAM-M8Q). → **phone-GPS** first; add onboard GPS only if phone-free
-   logging is required.
+2. **GPS source:** **external module wired to the board** (PA1010D or SAM-M8Q) — now
+   committed (see `AGENTS.md`). The phone is **only an interface** and never supplies
+   GPS; the earlier "phone-GPS bridge" option is dropped.
 3. **Strava:** phone-app sync (recommended) vs on-device OAuth. → **phone-app**; keeps
    the device token-free and simple.
 4. **Phone app:** RunnerUp vs OpenTracks vs custom. → **RunnerUp/OpenTracks** for MVP.
@@ -223,8 +240,8 @@ e.g. on-device GPS fusion, custom haptics cues, or a branded UI):
    RunnerUp/OpenTracks; walk → phone shows steps. **(First "connects to phone" win.)**
 3. **M3 — Strava E2E:** full walk → BLE → phone app → Strava activity.
 4. **M4 — Sleep & wear:** deep-sleep + motion wake; ankle enclosure (H3).
-5. **M5 — Extras:** haptics (H4), config service (S5), optional onboard GPS (H2/S6),
-   offline buffering (H5/S4).
+5. **M5 — On-device GPS + storage:** external GPS module (H2), step+GPS fusion on the
+   wearable (S6), offline buffering + phone sync (H5/S4).
 
 ---
 
