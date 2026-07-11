@@ -86,3 +86,30 @@ sessions, or the CLI): one worktree per task, host-test before any flash,
 claim the board before touching it, keep hardware behind the `IMUSensor`
 interface, and small reviewable PRs. Full list in *Agentic development
 practices* (CONTRIBUTING.md).
+
+## Agent operating rules (hard requirements)
+
+### Open PRs only through `/open-pr` — never `gh pr create` directly
+A hook blocks `gh pr create` unless a fresh review of the **exact current diff**
+is on record. Always open PRs via the `/open-pr` command, which enforces the
+intended "self-review with /code-review" flow (see *PRs* above) and does it with
+a **fresh-context reviewer**:
+
+1. `/open-pr` spawns a **fresh subagent** (new context — it has not seen the
+   coding conversation, so it reviews without author bias) that runs
+   `/code-review` on the branch diff vs `main` and returns a must-fix / nice-to-have list.
+2. Address every **must-fix** finding (edit, build, verify with `pio test -e native`).
+3. `/open-pr` records the review and opens a **draft** PR.
+
+Skipping this (running `gh pr create` yourself) will be denied by the hook.
+The point of a separate reviewer is that the author is blind to their own mistakes.
+
+### Choose plan mode autonomously
+Decide for yourself whether to enter plan mode — do not ask unless genuinely
+blocked:
+- **Enter plan mode** (`EnterPlanMode`) for non-trivial work: new features,
+  multi-file or architecturally significant changes, ambiguous approaches, or
+  anything the user should sign off on before code is written.
+- **Skip plan mode** for trivial, well-specified changes: typos, one-line bug
+  fixes, obvious config tweaks.
+- When in doubt, prefer presenting a plan first.

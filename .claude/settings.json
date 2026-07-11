@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pio --version)",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(gh pr:*)",
+      "Bash(git config *)",
+      "Skill(cc-websearch:websearch)",
+      "Skill(cc-websearch:webfetch)",
+      "Bash(curl -s https://nodejs.org/dist/index.json)",
+      "Bash(git:*)",
+      "Bash(pio:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "gh pr create",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/block-pr-without-review.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
