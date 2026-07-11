@@ -2,29 +2,31 @@
 #define NANOWEAR_PEDOMETER_H
 
 #include <stdint.h>
-#include "imu.h"
+#include "step_source.h"
 
 // ---------------------------------------------------------------------------
-// Pedometer — hardware-step accumulator (pure logic)
+// Pedometer — step accumulator (pure logic)
 // ---------------------------------------------------------------------------
-// Consumes the absolute step count reported by the IMU's embedded pedometer
-// and derives the running total plus the per-poll delta. It contains no I2C,
-// no Serial and no millis(): all inputs are injected, so it is fully
-// unit-testable on the host via MockIMU.
+// Consumes the absolute step count from a StepSource and derives the running
+// total plus the per-poll delta. The source is swappable: today it is the
+// LSM6DSOX embedded (MLC) pedometer via HardwareStepSource; later it can
+// be the software detector via SoftwareStepSource (see step_source.h) with NO
+// change here. It contains no I2C, no Serial and no millis(): all inputs
+// are injected, so it is fully unit-testable on the host.
 //
-// The IMU pedometer is already cumulative and monotonic, so a reset drives the
-// reported total back to zero. If the hardware counter is ever lower than the
-// last seen total (e.g. after a reset the firmware didn't catch), the delta is
+// The step source is already cumulative and monotonic, so a reset drives the
+// reported total back to zero. If the counter is ever lower than the last
+// seen total (e.g. after a reset the firmware didn't catch), the delta is
 // clamped to zero rather than going negative.
 //
-// Transport failures are handled gracefully: if readStepCount() reports an
-// error, the running `total` is left untouched (no steps are lost or invented)
-// and update() returns 0. Call readOk() after update() to see whether the last
+// Transport failures are handled gracefully: if read() reports an error, the
+// running `total` is left untouched (no steps are lost or invented) and
+// update() returns 0. Call readOk() after update() to see whether the last
 // read succeeded.
 // ---------------------------------------------------------------------------
 class Pedometer {
 public:
-    explicit Pedometer(IMUSensor& imu) : imu(imu) {}
+    explicit Pedometer(StepSource& src) : src(src) {}
 
     // Reset cumulative state to zero. MUST be called immediately after the
     // hardware counter is reset (e.g. the IMU's PEDO_RST_STEP command issued in
@@ -38,7 +40,7 @@ public:
     // read (transport error); the running total is preserved in that case.
     uint16_t update() {
         uint16_t hw = 0;
-        lastReadOk_ = imu.readStepCount(hw);
+        lastReadOk_ = src.read(hw);
         if (!lastReadOk_) return 0;
         uint16_t delta = (hw > total) ? static_cast<uint16_t>(hw - total) : 0;
         total = hw;
@@ -51,7 +53,7 @@ public:
     bool readOk() const { return lastReadOk_; }
 
 private:
-    IMUSensor& imu;
+    StepSource& src;
     uint16_t total = 0;
     bool lastReadOk_ = false;
 };
