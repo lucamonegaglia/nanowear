@@ -13,7 +13,7 @@
 
 - [ ] `pio test -e native` passes
 - [ ] `pio run -e nanorp2040connect` builds (or N/A)
-- [ ] Hardware verified on the Nano RP2040 Connect (or N/A)
+- [ ] Hardware verified on the Nano RP2040 Connect via `./scripts/flash-verify.sh` (or N/A)
 
 ## Risks / follow-ups
 
