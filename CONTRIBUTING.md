@@ -97,6 +97,8 @@ refactor(imu): extract IMUSensor interface from main.cpp
   - Add or update tests for any behaviour change.
   - Follow the PR template (`.github/pull_request_template.md`).
   - Explain *what* changed, *why*, and *how it was verified*.
+  - Be free of merge conflicts — rebase/merge onto the latest `main` and resolve
+    any conflict before opening the PR or requesting review.
 - Require at least one review. Use `/code-review` to self-review the diff
   before requesting a human review.
 - Example end-to-end flow:
