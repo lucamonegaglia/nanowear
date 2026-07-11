@@ -9,7 +9,9 @@
 // Isolated as a pure function so the byte-order maths is unit-testable without
 // touching I2C. Mirrors the original expression `(highByte << 8) | lowByte`.
 inline uint16_t combineStepBytes(uint8_t low, uint8_t high) {
-    return static_cast<uint16_t>((static_cast<uint16_t>(high) << 8) | low);
+    // `high` is uint8_t and is promoted to int before the shift, so only the
+    // final cast to uint16_t is load-bearing.
+    return static_cast<uint16_t>((high << 8) | low);
 }
 
 #endif // NANOWEAR_STEP_CODEC_H

@@ -9,11 +9,10 @@
 // ---------------------------------------------------------------------------
 // Formalises the flat poll loop into a small state machine:
 //
-//        BOOT ──onBootComplete──▶ LOGGING ──requestSync──▶ SYNC
-//         │                          ▲                        │
-//         │ startLogging             │ syncComplete          │
-//         ▼                          └────────────────────────┘
-//        IDLE
+//        BOOT ──startLogging──▶ LOGGING ──requestSync──▶ SYNC
+//                                  ▲                        │
+//                                  │ syncComplete          │
+//                                  └────────────────────────┘
 //
 //        (any active state) ──enterLowBattery──▶ LOW_BATTERY ──recover──▶ LOGGING
 //
@@ -24,7 +23,6 @@
 // ---------------------------------------------------------------------------
 enum class TrackerState : uint8_t {
     BOOT,        // power-up / sensor init; never polls
-    IDLE,        // armed but not accumulating (pre-activity standby)
     LOGGING,     // accumulating steps; polls the pedometer on an interval
     SYNC,        // (future) transferring the backlog to a phone over BLE
     LOW_BATTERY  // (future) critical battery; halts logging, may signal
@@ -37,19 +35,11 @@ public:
 
     TrackerState state() const { return st; }
 
-    // BOOT -> LOGGING once sensor init succeeds. Arms the poll timer.
-    void onBootComplete(unsigned long now) {
-        if (st == TrackerState::BOOT) {
-            st = TrackerState::LOGGING;
-            pollTimer.reset(now);
-        }
-    }
-
-    // BOOT/IDLE -> LOGGING (e.g. an activity starts). Arms the poll timer.
+    // BOOT -> LOGGING once sensor init succeeds (or an activity starts).
+    // Arms the poll timer.
     void startLogging(unsigned long now) {
-        if (st == TrackerState::BOOT || st == TrackerState::IDLE) {
-            st = TrackerState::LOGGING;
-            pollTimer.reset(now);
+        if (st == TrackerState::BOOT) {
+            enterLogging(now);
         }
     }
 
@@ -69,8 +59,7 @@ public:
     // SYNC -> LOGGING once the transfer finishes; re-arms the poll timer.
     void syncComplete(unsigned long now) {
         if (st == TrackerState::SYNC) {
-            st = TrackerState::LOGGING;
-            pollTimer.reset(now);
+            enterLogging(now);
         }
     }
 
@@ -82,12 +71,17 @@ public:
     // LOW_BATTERY -> LOGGING once charged/recovered (future).
     void recover(unsigned long now) {
         if (st == TrackerState::LOW_BATTERY) {
-            st = TrackerState::LOGGING;
-            pollTimer.reset(now);
+            enterLogging(now);
         }
     }
 
 private:
+    // Shared BOOT / SYNC / LOW_BATTERY -> LOGGING transition.
+    void enterLogging(unsigned long now) {
+        st = TrackerState::LOGGING;
+        pollTimer.reset(now);
+    }
+
     TrackerState st = TrackerState::BOOT;
     ElapsedTimer pollTimer;
 };

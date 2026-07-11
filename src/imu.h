@@ -17,6 +17,13 @@
 // `class IMU` / `IMU&` token in the board build into `IMU_LSM6DSOX`, breaking
 // compilation. The name also keeps the test double MockIMU unambiguous.
 //
+// The interface is deliberately minimal: initialise the sensor and read the
+// cumulative step count. The underlying transport can fail (e.g. a noisy I2C
+// bus), so readStepCount() reports success through its bool return rather than
+// smuggling an error into the count — see pedometer.h, which preserves the
+// running total across a failed read. Low-level register access lives only in
+// the concrete HardwareIMU, never in this abstraction.
+//
 // The production implementation (HardwareIMU) lives in hardware_imu.cpp and is
 // compiled only for the board. A test double (MockIMU) is provided below so
 // native tests stay hardware-free and deterministic.
@@ -25,51 +32,36 @@ class IMUSensor {
 public:
     virtual ~IMUSensor() = default;
 
-    // Initialize the sensor. Returns true on success.
+    // Initialize the sensor (and, on the board, the embedded pedometer engine).
+    // Returns true on success.
     virtual bool begin() = 0;
 
-    // Write a single byte to an IMU register over I2C.
-    virtual void writeRegister(uint8_t reg, uint8_t value) = 0;
-
-    // Read a single byte from an IMU register.
-    virtual uint8_t readRegister(uint8_t reg) = 0;
-
-    // Read the absolute step count maintained by the embedded pedometer
-    // engine. The engine is cumulative and saturates at 65535.
-    virtual uint16_t readStepCount() = 0;
+    // Read the absolute, cumulative step count maintained by the embedded
+    // pedometer engine. The engine is cumulative and saturates at 65535.
+    // Returns false on a transport error; in that case `out` is left unchanged.
+    virtual bool readStepCount(uint16_t& out) = 0;
 };
 
 // ---------------------------------------------------------------------------
 // MockIMU — test double for the host (native) unit tests
 // ---------------------------------------------------------------------------
-// Records calls and returns scripted values. Tests assign `stepCount` and
-// assert on the call counters; no real hardware is touched.
+// Records calls and returns scripted values. Tests assign `stepCount` /
+// `readStepCountResult` and assert on `beginResult`; no real hardware is
+// touched.
 // ---------------------------------------------------------------------------
 class MockIMU : public IMUSensor {
 public:
-    bool beginCalled = false;
     bool beginResult = true;
     uint16_t stepCount = 0;
-    int beginCallCount = 0;
-    int readStepCountCallCount = 0;
+    bool readStepCountResult = true;
 
     bool begin() override {
-        beginCalled = true;
-        beginCallCount++;
         return beginResult;
     }
 
-    void writeRegister(uint8_t /*reg*/, uint8_t /*value*/) override {
-        // No side effects needed for the current logic tests.
-    }
-
-    uint8_t readRegister(uint8_t /*reg*/) override {
-        return 0;
-    }
-
-    uint16_t readStepCount() override {
-        readStepCountCallCount++;
-        return stepCount;
+    bool readStepCount(uint16_t& out) override {
+        out = stepCount;
+        return readStepCountResult;
     }
 };
 

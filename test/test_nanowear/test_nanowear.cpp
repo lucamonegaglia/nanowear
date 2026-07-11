@@ -6,17 +6,25 @@
 #include "state_machine.h"
 
 // ---------------------------------------------------------------------------
-// NanoWear host test suite (single binary; PlatformIO links all test/*.cpp
-// flat into one program, so there is exactly ONE setUp/tearDown here).
+// NanoWear host test suite.
 //
-// NOTE: this environment's `native` + Unity setup does not auto-generate the
-// test runner `main()`, so we provide one explicitly with UNITY_BEGIN /
-// RUN_TEST / UNITY_END. Add new RUN_TEST(...) lines as tests grow.
+// This file lives in a `test_*`-prefixed directory (test/test_nanowear/) so
+// PlatformIO discovers it as an explicit suite. That keeps CI robust: adding a
+// second `test_*/` suite is additive, whereas a flat test/*.cpp layout relies
+// on PlatformIO's `* fallback` suite, which is silently dropped the moment any
+// `test_*` directory appears.
+//
+// NOTE: this environment's native + Unity setup does not auto-generate the
+// test runner `main()`, so we provide one explicitly. Keep exactly ONE main()
+// per suite — if you add another .cpp to this directory, do NOT define main()
+// there. Add new tests below using the void test_*(void) convention;
+// setUp()/tearDown() run around each.
 //
 // Coverage:
 //   * step_codec    — little-endian step-byte assembly
 //   * elapsed_timer — non-blocking interval boundary
-//   * pedometer     — total/delta accumulation (MockIMU), + simulated e2e loop
+//   * pedometer     — total/delta accumulation (MockIMU), I2C-failure handling,
+//                     + simulated e2e loop
 //   * state_machine — BOOT→LOGGING→SYNC / LOW_BATTERY transitions
 // ---------------------------------------------------------------------------
 
@@ -106,6 +114,24 @@ void test_pedometer_delta_clamped_backwards(void) {
     TEST_ASSERT_EQUAL_UINT16(0, pedo.update());
     TEST_ASSERT_EQUAL_UINT16(150, pedo.getTotal());
 }
+// A failed I2C read must NOT destroy already-accumulated steps: the running
+// total is preserved and update() returns 0, then recovers on the next good read.
+void test_pedometer_no_loss_on_read_failure(void) {
+    mock.stepCount = 500; pedo.update();
+    TEST_ASSERT_EQUAL_UINT16(500, pedo.getTotal());
+
+    mock.readStepCountResult = false;   // simulate a bus error
+    mock.stepCount = 0;                 // bogus value must be ignored
+    TEST_ASSERT_EQUAL_UINT16(0, pedo.update());
+    TEST_ASSERT_FALSE(pedo.readOk());
+    TEST_ASSERT_EQUAL_UINT16(500, pedo.getTotal());
+
+    mock.readStepCountResult = true;
+    mock.stepCount = 520;
+    TEST_ASSERT_EQUAL_UINT16(20, pedo.update());
+    TEST_ASSERT_TRUE(pedo.readOk());
+    TEST_ASSERT_EQUAL_UINT16(520, pedo.getTotal());
+}
 // Simulated end-to-end: what loop() does every 2 seconds.
 void test_pedometer_e2e_loop_simulation(void) {
     const uint16_t readings[] = {0, 25, 25, 60, 130, 130, 131};
@@ -127,22 +153,22 @@ void test_sm_starts_in_boot(void) {
     TEST_ASSERT_FALSE(sm.shouldPoll(0));
     TEST_ASSERT_FALSE(sm.shouldPoll(100000));
 }
-void test_sm_boot_complete_enters_logging(void) {
-    sm.onBootComplete(1000);
+void test_sm_boot_enters_logging(void) {
+    sm.startLogging(1000);
     TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::LOGGING, (uint8_t)sm.state());
     TEST_ASSERT_FALSE(sm.shouldPoll(1000));
     TEST_ASSERT_FALSE(sm.shouldPoll(2999));
     TEST_ASSERT_TRUE(sm.shouldPoll(3000));
 }
 void test_sm_poll_rearm(void) {
-    sm.onBootComplete(0);
+    sm.startLogging(0);
     TEST_ASSERT_TRUE(sm.shouldPoll(2000));
     sm.markPolled(2000);
     TEST_ASSERT_FALSE(sm.shouldPoll(2000));
     TEST_ASSERT_TRUE(sm.shouldPoll(4000));
 }
 void test_sm_sync_cycle(void) {
-    sm.onBootComplete(0);
+    sm.startLogging(0);
     sm.requestSync();
     TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::SYNC, (uint8_t)sm.state());
     TEST_ASSERT_FALSE(sm.shouldPoll(99999));
@@ -151,7 +177,7 @@ void test_sm_sync_cycle(void) {
     TEST_ASSERT_TRUE(sm.shouldPoll(7000));
 }
 void test_sm_low_battery_and_recover(void) {
-    sm.onBootComplete(0);
+    sm.startLogging(0);
     sm.enterLowBattery();
     TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::LOW_BATTERY, (uint8_t)sm.state());
     TEST_ASSERT_FALSE(sm.shouldPoll(99999));
@@ -179,9 +205,10 @@ int main(void) {
     RUN_TEST(test_pedometer_no_change_zero_delta);
     RUN_TEST(test_pedometer_reset);
     RUN_TEST(test_pedometer_delta_clamped_backwards);
+    RUN_TEST(test_pedometer_no_loss_on_read_failure);
     RUN_TEST(test_pedometer_e2e_loop_simulation);
     RUN_TEST(test_sm_starts_in_boot);
-    RUN_TEST(test_sm_boot_complete_enters_logging);
+    RUN_TEST(test_sm_boot_enters_logging);
     RUN_TEST(test_sm_poll_rearm);
     RUN_TEST(test_sm_sync_cycle);
     RUN_TEST(test_sm_low_battery_and_recover);

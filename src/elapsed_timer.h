@@ -25,8 +25,6 @@ public:
         return (now - lastTick) >= intervalMs;
     }
 
-    void setInterval(unsigned long intervalMs) { this->intervalMs = intervalMs; }
-
 private:
     unsigned long lastTick = 0;
     unsigned long intervalMs = 0;

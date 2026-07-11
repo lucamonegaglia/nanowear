@@ -17,17 +17,26 @@
 // ---------------------------------------------------------------------------
 class HardwareIMU : public IMUSensor {
 public:
+    // Initialise the sensor and configure the embedded pedometer engine.
+    // Returns true only if both the presence check and the pedometer
+    // configuration succeed.
     bool begin() override;
-    void writeRegister(uint8_t reg, uint8_t value) override;
-    uint8_t readRegister(uint8_t reg) override;
-    uint16_t readStepCount() override;
 
-    // Configure the LSM6DSOX embedded pedometer engine (call once after begin()).
-    // Public so main.cpp can drive the explicit BOOT -> LOGGING sequence; a
-    // later revision may fold this into begin().
-    void initHardwarePedometer();
+    // Read the cumulative step count. Returns false on a transport error.
+    bool readStepCount(uint16_t& out) override;
 
 private:
+    // Write a single byte to an IMU register over I2C. Returns true on ACK.
+    bool writeRegister(uint8_t reg, uint8_t value);
+
+    // Configure the LSM6DSOX embedded pedometer engine (called from begin()).
+    bool initHardwarePedometer();
+
+    // Open / close the Embedded Functions configuration register bank.
+    bool openFuncBank();
+    bool closeFuncBank();
+
+    static constexpr uint8_t SUBADDR_AUTO_INC = 0x80; // MSB of sub-address = burst read
 
     // LSM6DSOX I2C device address
     static constexpr uint8_t LSM6DSOX_I2C_ADDR = 0x6A;

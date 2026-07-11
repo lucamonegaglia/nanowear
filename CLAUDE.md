@@ -27,9 +27,9 @@ PlatformIO is installed at `~/.platformio/penv/bin` (use `pio` from there, or
 | `src/pedometer.{h,cpp}` | Pure step-counting logic (total + delta) | **Yes** |
 | `src/elapsed_timer.h` | Non-blocking millisecond timer | **Yes** |
 | `src/step_codec.h` | Little-endian step-byte assembler | **Yes** |
-| `src/state_machine.h` | Non-blocking `BOOT→IDLE→LOGGING→SYNC→LOW_BATTERY` | **Yes** |
+| `src/state_machine.h` | Non-blocking `BOOT→LOGGING→SYNC→LOW_BATTERY` | **Yes** |
 | `src/imu.h` | `IMU` interface + `MockIMU` test double | **Yes** |
-| `test/host/*.cpp` | Native Unity suites (unit + simulated e2e) | n/a (test code) |
+| `test/<suite>/*.cpp` | Native Unity suites (unit + simulated e2e); `<suite>` must start with `test_` | n/a (test code) |
 
 The key idea: **all hardware access lives behind the `IMU` interface**, so the
 logic in `Pedometer` / `ElapsedTimer` / `StateMachine` / `combineStepBytes` is
@@ -118,7 +118,10 @@ Three layers, cheapest first:
 
 ### Adding a test (example)
 
-Create `test/host/test_pedometer.cpp`:
+Place each suite in a `test_*`-prefixed directory (PlatformIO only auto-discovers
+directories whose basename starts with `test_`; the `test/host/` path in older
+docs does **not** match that rule and is silently dropped the moment any real
+`test_*` suite appears). For example `test/test_pedometer/test_pedometer.cpp`:
 
 ```cpp
 #include <unity.h>
@@ -141,8 +144,11 @@ void test_delta_clamped_when_counter_goes_backwards(void) {
 ```
 
 Rules:
-- File name `test_*.cpp`; test functions named `test_*`.
-- Optional `setUp()` / `tearDown()` run around each test.
+- Put suites under `test/<name>/` where `<name>` starts with `test_`.
+- Do **not** define your own `int main()` — PlatformIO auto-generates the Unity
+  runner for `test_*` suites. Adding another `test_*` suite is additive; adding
+  a second `*.cpp` to an existing suite just adds tests (no `main()` clash).
+- Test functions named `test_*`; optional `setUp()` / `tearDown()` run around each.
 - Assert with `TEST_ASSERT_*` from Unity.
 - Use `MockIMU` to script sensor behaviour — never real I2C in host tests.
 
