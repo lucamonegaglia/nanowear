@@ -1,11 +1,13 @@
 #include <unity.h>
 #include "pedometer.h"
+#include "step_source.h"   // HardwareStepSource (swappable step seam)
 #include "imu.h"
 #include "step_codec.h"
 #include "elapsed_timer.h"
 #include "state_machine.h"
 #include "test_ble.h"   // BLE-link test prototypes (defined in test/test_ble.cpp)
-#include "step_log.h"
+#include "step_log.h"   // bounded in-RAM step log (PR #14)
+#include "test_gait.h"  // running-dynamics test prototypes
 
 // ---------------------------------------------------------------------------
 // NanoWear host test suite.
@@ -32,7 +34,8 @@
 // ---------------------------------------------------------------------------
 
 static MockIMU mock;
-static Pedometer pedo(mock);
+static HardwareStepSource stepSrc(mock);  // swappable seam: wraps the IMU
+static Pedometer pedo(stepSrc);
 static StateMachine sm(2000);
 
 void setUp(void) {
@@ -303,9 +306,20 @@ int main(void) {
     RUN_TEST(test_derive_cadence_basic);
     RUN_TEST(test_derive_cadence_zero_delta);
 
-    // --- DEBUG state-machine transitions ------------------------------------
+    // --- DEBUG state-machine transitions (PR #14) --------------------------
     RUN_TEST(test_sm_enter_debug_pauses_polling);
     RUN_TEST(test_sm_resume_logging_rearms);
     RUN_TEST(test_sm_debug_only_from_logging);
+
+    // --- BLE link: gait notify (running-dynamics characteristic) -----------
+    RUN_TEST(test_mock_notify_gait_records_snapshot);
+
+    // --- running dynamics (FIFO decode + gait detector + codec + seam) -----
+    RUN_TEST(test_decode_fifo_roundtrip);
+    RUN_TEST(test_gait_detector_recovers_contact_and_cadence);
+    RUN_TEST(test_running_dynamics_codec_roundtrip);
+    RUN_TEST(test_step_source_hardware_wraps_mock);
+    RUN_TEST(test_step_source_software_counts_strides);
+    RUN_TEST(test_pedometer_seam_hardware_step_source);
     return UNITY_END();
 }
