@@ -19,6 +19,7 @@ static StepResetCallback s_resetCb = nullptr;
 static const char* NANOWEAR_SERVICE_UUID = "9a1b2c3d-0000-4b06-a1b2-3c4d5e6f7a8b";
 static const char* NANOWEAR_STEPS_UUID   = "9a1b2c3d-0001-4b06-a1b2-3c4d5e6f7a8b";
 static const char* NANOWEAR_CONTROL_UUID = "9a1b2c3d-0002-4b06-a1b2-3c4d5e6f7a8b";
+static const char* NANOWEAR_DYNAMICS_UUID = "9a1b2c3d-0003-4b06-a1b2-3c4d5e6f7a8b";
 
 // GATT objects (one set; reused across connections).
 static BLEService        rscService("1814");
@@ -28,6 +29,7 @@ static BLEUnsignedCharCharacteristic  sensorLocation("2A5D", BLERead);
 static BLEService        nanoService(NANOWEAR_SERVICE_UUID);
 static BLECharacteristic nanoSteps(NANOWEAR_STEPS_UUID, BLERead | BLENotify, 4);
 static BLECharacteristic nanoControl(NANOWEAR_CONTROL_UUID, BLEWrite, 1);
+static BLECharacteristic nanoDynamics(NANOWEAR_DYNAMICS_UUID, BLERead | BLENotify, 10);
 
 // RSC Feature bitmask (uint16): bit0 stride-length, bit1 total-distance,
 // bit2 walking/running, bit3 calibration, bit4 multi-sensor-location.
@@ -70,9 +72,10 @@ bool ArduinoBlePeripheral::begin(const char* deviceName) {
     rscFeature.writeValue(RSC_FEATURE_VALUE);
     sensorLocation.writeValue(RSC_SENSOR_LOCATION_FOOT);
 
-    // Custom NanoWear service: raw steps + reset control.
+    // Custom NanoWear service: raw steps + reset control + dynamics.
     nanoService.addCharacteristic(nanoSteps);
     nanoService.addCharacteristic(nanoControl);
+    nanoService.addCharacteristic(nanoDynamics);
     BLE.addService(nanoService);
 
     // Wire events.
@@ -119,6 +122,14 @@ void ArduinoBlePeripheral::notifySteps(uint32_t totalSteps) {
     uint8_t steps[4];
     encodeStepCount(steps, totalSteps);
     nanoSteps.writeValue(steps, 4);
+}
+
+void ArduinoBlePeripheral::notifyGait(const GaitMetrics& m) {
+    if (!begun) return; // nothing to notify on until BLE is up
+    // Pack the one-stride snapshot into the 10-byte dynamics payload.
+    uint8_t buf[10];
+    encodeGaitMetrics(buf, m);
+    nanoDynamics.writeValue(buf, 10);
 }
 
 void ArduinoBlePeripheral::onStepReset(StepResetCallback cb) {
