@@ -20,9 +20,9 @@ This is an early-stage prototype. The board is the only hard constraint; most su
 
 These appear in the original product vision but are **not fixed**. Treat as direction, not requirements, unless the user confirms:
 
-- **GPS module:** External micro I2C GPS (e.g. PA1010D or SAM-M8Q) — vendor not chosen.
+- **GPS module:** External micro I2C GPS **module wired to the board** (e.g. PA1010D or SAM-M8Q) — vendor not chosen. The GPS lives **on the wearable itself**, never on the phone.
 - **Data storage:** Onboard 16MB flash as `.gpx`-structured files — approach unvalidated.
-- **Connectivity / sync:** Wi-Fi direct HTTP POST to Strava, or BLE 4.2 smartphone bridge — undecided.
+- **Connectivity / sync:** Wi-Fi direct HTTP POST to Strava, or BLE 4.2 bridge to a smartphone — undecided. The phone is used **only as an interface/display for the wearable** (e.g. to fetch logged data or trigger a sync); it is **not** a pedometer or fitness device, and it never supplies GPS.
 - **Haptics:** Optional GPIO-controlled vibration motor — not yet implemented.
 - **Power:** 3.7V 1000mAh LiPo target with ~80–90mA draw — optimize for sleep, but numbers are targets, not specs.
 
