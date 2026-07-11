@@ -112,6 +112,22 @@ void test_mock_reset_callback_invoked(void) {
     TEST_ASSERT_EQUAL_INT(1, mock.resetRequestsHandled);
 }
 
+// --- MockBlePeripheral: dynamics snapshot --------------------------
+void test_mock_notify_gait_records_snapshot(void) {
+    MockBlePeripheral mock;
+    GaitMetrics m;
+    m.valid = true;
+    m.contactTimeMs = 250.5f;
+    m.cadenceSpm = 180.f;
+    m.strike = StrikePattern::REARFOOT;
+    mock.notifyGait(m);
+    TEST_ASSERT_EQUAL_INT(1, mock.gaitNotifyCount);
+    TEST_ASSERT_TRUE(mock.lastGait.valid);
+    TEST_ASSERT_FLOAT_WITHIN(250.5f, mock.lastGait.contactTimeMs, 0.001f);
+    TEST_ASSERT_FLOAT_WITHIN(180.0f, mock.lastGait.cadenceSpm, 0.001f);
+    TEST_ASSERT_EQUAL_INT((int)StrikePattern::REARFOOT, (int)mock.lastGait.strike);
+}
+
 // ---------------------------------------------------------------------------
 // NOTE: the RUN_TEST(...) registrations for the tests above live in
 // test/test_nanowear.cpp's single main() so there is exactly one runner.
