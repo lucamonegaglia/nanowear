@@ -39,7 +39,7 @@ NANO_CONTROL = "9a1b2c3d-0002-4b06-a1b2-3c4d5e6f7a8b"
 def decode_rsc(data: bytearray):
     """RSC Measurement (0x2A53): flags(1) + speed uint16 m/s*256 + cadence(1)."""
     if len(data) < 4:
-        return None, None
+        return None, None, None
     flags = data[0]
     speed = struct.unpack("<H", data[1:3])[0] / 256.0  # m/s
     cadence_units = data[3]  # 0.5 steps/sec units

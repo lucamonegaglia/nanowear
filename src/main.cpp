@@ -69,6 +69,7 @@ void setup() {
     pinMode(LEDB, OUTPUT);
     if (!ble.begin("NanoWear")) {
         Serial.println("[BLE] ERROR: failed to start peripheral (NINA firmware < 3.0.1?)");
+        digitalWrite(LEDB, HIGH); // LED off: BLE not active
     } else {
         ble.onStepReset(handleStepReset);
         digitalWrite(LEDB, LOW); // blue ON = advertising

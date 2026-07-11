@@ -101,7 +101,9 @@ void ArduinoBlePeripheral::notifySteps(uint32_t totalSteps) {
                              : 0;
         unsigned long dtSec = (now - lastNotifyMs) / 1000;
         if (dtSec > 0) {
-            cadenceSpm = static_cast<uint16_t>(delta * 60 / dtSec);
+            // uint64_t to avoid overflow when delta is large (defensive).
+            cadenceSpm = static_cast<uint16_t>(
+                static_cast<uint64_t>(delta) * 60 / dtSec);
         }
     }
     lastTotalSteps = totalSteps;

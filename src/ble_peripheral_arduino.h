@@ -37,7 +37,6 @@ public:
     void poll() override;
 
 private:
-    StepResetCallback resetCb = nullptr;
     bool begun = false; // true once BLE.begin() has succeeded
 
     // Cadence derivation state (driver-local; not part of the interface).

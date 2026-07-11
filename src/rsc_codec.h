@@ -35,15 +35,17 @@ inline uint8_t rscFlags(bool stridePresent, bool distancePresent,
 // Convert a cadence in steps/minute to the RSC Measurement cadence field.
 // Per the SIG spec the field unit is 0.5 steps/second, so the encoded value is
 // spm / 30 (spm/60 steps-per-sec * 2 half-steps-per-sec). e.g. 180 spm -> 6.
+// Clamped to 255 so an out-of-range input can't wrap the uint8 field.
 inline uint8_t cadenceToRscUnits(uint16_t stepsPerMinute) {
-    return static_cast<uint8_t>(stepsPerMinute / 30);
+    uint16_t units = stepsPerMinute / 30;
+    return static_cast<uint8_t>(units > 255 ? 255 : units);
 }
 
 // Encode the minimal RSC Measurement payload: [flags, speedLo, speedHi, cadence].
-// Speed is always present in the RSC Measurement and is written as 0 ("not
-// available") because the ankle unit measures steps, not speed. `cadenceUnits`
-// is the pre-scaled value from cadenceToRscUnits(). Writes exactly 4 bytes and
-// returns the byte count. `out` must point to at least 4 bytes.
+// Speed is always present in the RSC Measurement (it is not flag-gated) and is
+// written as 0 = 0.0 m/s (stationary), because the ankle unit measures steps,
+// not speed. `cadenceUnits` is the pre-scaled value from cadenceToRscUnits().
+// Writes exactly 4 bytes and returns the byte count. `out` must point to >= 4.
 inline uint8_t encodeRscMeasurement(uint8_t* out, uint8_t flags,
                                     uint8_t cadenceUnits) {
     out[0] = flags;       // Flags
