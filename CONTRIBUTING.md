@@ -95,6 +95,11 @@ refactor(imu): extract IMUSensor interface from main.cpp
 - Every PR must:
   - Pass CI (firmware builds for the board **and** native tests pass).
   - Add or update tests for any behaviour change.
+  - Keep `README.md` in sync: if the PR changes anything user-facing — features,
+    supported behaviour, the build/test/flash commands, or the "what works
+    today" / "not implemented yet" sections — update `README.md` and tick the
+    corresponding box in the PR template. Pure refactors, test-only, or doc-only
+    changes that don't alter behaviour generally don't need a README touch-up.
   - Follow the PR template (`.github/pull_request_template.md`).
   - Explain *what* changed, *why*, and *how it was verified*.
   - Be free of merge conflicts — rebase/merge onto the latest `main` and resolve

@@ -14,6 +14,7 @@
 - [ ] `pio test -e native` passes
 - [ ] `pio run -e nanorp2040connect` builds (or N/A)
 - [ ] Hardware verified on the Nano RP2040 Connect (or N/A)
+- [ ] `README.md` updated, if this PR changes user-facing features or behaviour
 
 ## Risks / follow-ups
 

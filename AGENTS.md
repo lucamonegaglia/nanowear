@@ -62,8 +62,9 @@ documented in full in **[CONTRIBUTING.md](CONTRIBUTING.md)**:
   (`feature/<slug>`, `fix/<slug>`, `chore/<slug>`). Use a worktree per task.
 - **Commits:** Conventional Commits, `<type>(<scope>): <subject>`
   (`feat`/`fix`/`refactor`/`test`/`docs`/`ci`/`perf`/`chore`).
-- **PRs:** open as draft; require green CI, tests for behaviour changes, and
-  the PR template (`.github/pull_request_template.md`); self-review with
+- **PRs:** open as draft; require green CI, tests for behaviour changes, the
+  PR template (`.github/pull_request_template.md`), and a `README.md` update
+  when the PR changes user-facing features or behaviour; self-review with
   `/code-review` before human review.
 - **Testing (3 layers):** (1) host unit tests `pio test -e native` via
   `MockIMU`; (2) simulated end-to-end; (3) gated hardware e2e on
