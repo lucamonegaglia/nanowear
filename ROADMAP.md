@@ -82,11 +82,16 @@ never supplies GPS. Two module choices; both are onboard, neither involves the p
 
 - **PA1010D** (MiniGPS, ~10 mA) — smaller, lower-power; good default.
 - **SAM-M8Q** (better sensitivity, more power) — stronger fix in tough RF / tree cover.
+- **(Recommended) u-blox MAX-M10S** — best sensitivity for the bad-sky ankle and
+  lowest power in Super-E mode; the strongest standalone choice. Avoid the multi-band
+  **NEO-M9N** (power too high, wasted without a good antenna).
 
 `TinyGPSPlus` is already wired in `platformio.ini`. Adds cost, antenna, and power
 budget versus a phone-less design, but keeps the wearable fully independent of any
 phone for position — which is the point of this product. (The earlier "phone-GPS
-bridge" idea is dropped: the phone is only an interface, never a sensor.)
+bridge" idea is dropped: the phone is only an interface, never a sensor.) See
+`docs/gps-evaluation.md` for the full board comparison and how GPS feeds stride
+calibration + step/cadence validation.
 
 ### H3 — Ankle enclosure & wearability
 - 3D-printed or molded **above-ankle strap** enclosure; secure the IMU against the
