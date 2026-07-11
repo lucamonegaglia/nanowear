@@ -15,12 +15,19 @@ is wired to**, via:
 `run_e2e.py`, which opens the serial port, prints every line live (the serial
 terminal monitor), and runs one test per feature.
 
+Requires `pyserial` on the dev PC:
+
+```bash
+python3 -m pip install -r tests/e2e/requirements.txt
+```
+
 ## How a run looks
 
 ```
 ==> Flashing firmware to /dev/ttyACM0 …
 ==> Running on-device e2e harness (tests/e2e)…
-[serial] [STATE] BOOT complete -> LOGGING
+[serial] [NW] BOOT_OK
+[serial] [PEDOMETER] Total steps: 0
 [serial] [NW] BOOT_OK
 [serial] [PEDOMETER] Total steps: 0
 PASS  test_boot.py:test_boot_emits_sentinel
@@ -30,6 +37,10 @@ PASS  test_pedometer.py:test_pedometer_reports_total
 3/3 e2e test(s) PASSED
 ```
 
+(`[NW] BOOT_OK` is re-emitted on every `LOGGING` poll — it acts as a heartbeat
+confirming the device is in `LOGGING`, and guarantees the harness captures it no
+matter when the serial monitor attaches.)
+
 ## The serial contract
 
 The harness matches **debug lines the firmware prints to `Serial`**. The
@@ -37,7 +48,7 @@ firmware must emit stable, machine-readable markers:
 
 | Marker | Meaning | Emitted by |
 |--------|---------|------------|
-| `[NW] BOOT_OK` | Firmware reached `LOGGING` after a successful boot | `src/main.cpp` `setup()` |
+| `[NW] BOOT_OK` | Firmware is in `LOGGING` (boot succeeded); re-emitted on every `LOGGING` poll as a heartbeat | `src/main.cpp` `loop()` |
 | `[STATE] BOOT complete -> LOGGING` | Human-readable equivalent of the above | `src/main.cpp` |
 | `[STATE] Not logging (…)` | Boot failed (e.g. IMU not found); device is responsive, not hung | `src/main.cpp` `loop()` |
 | `[PEDOMETER] Total steps: <n>` | A polled step total (uint16, 0–65535) | `src/main.cpp` `loop()` |

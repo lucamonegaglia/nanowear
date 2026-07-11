@@ -43,7 +43,7 @@ cd "$ROOT"
 AGENT="${USER:-local}-flash-verify"
 PORT="/dev/ttyACM0"
 BAUD="115200"
-E2E_TIMEOUT="30"
+E2E_TIMEOUT="15"
 DO_BUILD=1
 DO_FLASH=1
 
@@ -68,6 +68,8 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Claiming board ($AGENT)…"
+# If another agent holds the board, add --wait to block until it is free
+# instead of failing immediately.
 ./scripts/board-lock.sh claim "$AGENT" --purpose "$PURPOSE"
 
 if (( DO_BUILD )); then

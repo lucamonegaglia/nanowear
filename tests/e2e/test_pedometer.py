@@ -10,7 +10,7 @@ import re
 def test_pedometer_reports_total(ctx):
     """At least one '[PEDOMETER] Total steps: N' line must appear, and N must be
     a valid uint16 in [0, 65535] (covers the saturation edge case)."""
-    line = ctx.expect(r"\[PEDOMETER\] Total steps: (\d+)", timeout=15)
+    line = ctx.expect(r"\[PEDOMETER\] Total steps: (\d+)")
     m = re.search(r"Total steps: (\d+)", line)
     # expect() already guaranteed a match, but be explicit for the bound check.
     assert m, f"pedometer total line malformed: {line!r}"

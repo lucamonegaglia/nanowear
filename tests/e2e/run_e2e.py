@@ -27,7 +27,7 @@ import serial
 
 DEFAULT_PORT = "/dev/ttyACM0"
 DEFAULT_BAUD = 115200
-DEFAULT_TIMEOUT = 30
+DEFAULT_TIMEOUT = 15
 CONNECT_RETRIES = 30          # x 0.5s — board re-enumerates serial after reset
 CONNECT_RETRY_SLEEP = 0.5
 
@@ -35,28 +35,30 @@ CONNECT_RETRY_SLEEP = 0.5
 class SerialCtx:
     """Shared serial state handed to every test function.
 
-    `lines` holds every line received so far; `start` is this test's cursor into
-    it, so tests never steal each other's matches. `expect()` blocks until a
-    matching line appears at/after the cursor, or raises AssertionError.
+    `lines` holds every line received so far. `expect()` blocks until a matching
+    line appears (scanning from the start of the captured session — tests assert
+    on the device's whole output, and a feature's marker may appear before the
+    test function begins), or raises AssertionError on timeout.
     """
 
-    def __init__(self, lines, lock, start):
+    def __init__(self, lines, lock, timeout):
         self._lines = lines
         self._lock = lock
-        self._start = start
+        self._timeout = timeout
 
-    def expect(self, pattern, timeout=10.0):
-        """Return the first line matching `pattern` (regex) from this test's
-        cursor onward, advancing the cursor past it. Raise AssertionError on
-        timeout so the harness reports a clean FAIL."""
+    def expect(self, pattern, timeout=None):
+        """Block until a line matching `pattern` (regex) appears, returning it.
+        Uses `timeout` if given, else this context's default. Raise
+        AssertionError on timeout so the harness reports a clean FAIL."""
+        if timeout is None:
+            timeout = self._timeout
         rx = re.compile(pattern)
         deadline = time.time() + timeout
         while time.time() < deadline:
             with self._lock:
-                for i in range(self._start, len(self._lines)):
-                    if rx.search(self._lines[i]):
-                        self._start = i + 1
-                        return self._lines[i]
+                for line in self._lines:
+                    if rx.search(line):
+                        return line
             time.sleep(0.05)
         raise AssertionError(
             f"timeout ({timeout}s) waiting for /{pattern}/ on serial"
@@ -95,6 +97,17 @@ def _open_serial(port, baud):
     raise SystemExit(f"could not open serial {port}: {last_err}")
 
 
+def _make_failing_test(name, exc):
+    """Synthetic test that fails with the given error (used when a test module
+    cannot be imported, so a broken file records a FAIL instead of crashing the
+    whole harness with a traceback)."""
+
+    def _t(_ctx):
+        raise AssertionError(f"could not load {name}: {exc}")
+
+    return _t
+
+
 def _discover_tests():
     """Find test_<feature>.py files and collect their test_* functions."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -104,9 +117,13 @@ def _discover_tests():
             continue
         path = os.path.join(here, fname)
         modname = fname[:-3]
-        spec = importlib.util.spec_from_file_location(modname, path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        try:
+            spec = importlib.util.spec_from_file_location(modname, path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        except Exception as e:  # noqa: BLE001 - record as a FAIL, don't crash
+            collected.append((f"{fname}:<load-error>", _make_failing_test(fname, e)))
+            continue
         for attr in dir(mod):
             if attr.startswith("test_") and callable(getattr(mod, attr)):
                 collected.append((f"{fname}:{attr}", getattr(mod, attr)))
@@ -147,10 +164,9 @@ def main():
 
     failures = []
     for name, fn in tests:
-        # Each test scans the whole captured session from the start: the device
-        # may emit a feature's marker (e.g. the boot sentinel) before the test
-        # function begins, so a per-test cursor would miss it.
-        ctx = SerialCtx(lines, lock, 0)
+        # Every test scans the whole captured session (from the start), so a
+        # feature's marker emitted before the test begins is still seen.
+        ctx = SerialCtx(lines, lock, args.timeout)
         try:
             fn(ctx)
             print(f"PASS  {name}")
