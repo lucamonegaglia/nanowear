@@ -29,9 +29,9 @@ PlatformIO is installed at `~/.platformio/penv/bin` (use `pio` from there, or
 | `src/pedometer.{h,cpp}` | Pure step-counting logic (total + delta) | **Yes** |
 | `src/elapsed_timer.h` | Non-blocking millisecond timer | **Yes** |
 | `src/step_codec.h` | Little-endian step-byte assembler | **Yes** |
-| `src/state_machine.h` | Non-blocking `BOOT→IDLE→LOGGING→SYNC→LOW_BATTERY` | **Yes** |
+| `src/state_machine.h` | Non-blocking `BOOT→LOGGING→SYNC→LOW_BATTERY` | **Yes** |
 | `src/imu.h` | `IMUSensor` interface + `MockIMU` test double | **Yes** |
-| `test/host/*.cpp` | Native Unity suites (unit + simulated e2e) | n/a (test code) |
+| `test/<suite>/*.cpp` | Native Unity suites (unit + simulated e2e); `<suite>` must start with `test_` | n/a (test code) |
 | `scripts/board-lock.sh` | Claim/release the shared board for testing | n/a (tooling) |
 
 The key idea: **all hardware access lives behind the `IMUSensor` interface**,
@@ -113,7 +113,8 @@ Three layers, cheapest first:
 1. **Unit tests (host, fast, no hardware)** — `pio test -e native`.
    Pure logic in `Pedometer`, `ElapsedTimer`, `StateMachine`, and
    `combineStepBytes`, driven by `MockIMU`. Runs in CI on every push/PR — the
-   primary safety net. Suites live in `test/host/`; the native env compiles
+   primary safety net. Suites live in `test/test_*/` (a `test_`-prefixed
+   directory so PlatformIO discovers them explicitly); the native env compiles
    `src/*.cpp` (excluding `main.cpp` / `hardware_imu.cpp`) so the build stays
    hardware-free.
 2. **Simulated end-to-end (host)** — a test that replays a *sequence* of
@@ -125,7 +126,10 @@ Three layers, cheapest first:
 
 ### Adding a test (example)
 
-Create `test/host/test_pedometer.cpp`:
+Place each suite in a `test_*`-prefixed directory (PlatformIO only auto-discovers
+directories whose basename starts with `test_`; the `test/host/` path in older
+docs does **not** match that rule and is silently dropped the moment any real
+`test_*` suite appears). For example `test/test_pedometer/test_pedometer.cpp`:
 
 ```cpp
 #include <unity.h>
@@ -147,9 +151,15 @@ void test_delta_clamped_when_counter_goes_backwards(void) {
 }
 ```
 
-Rules: file `test_*.cpp`; functions `test_*`; optional `setUp()`/`tearDown()`;
-assert with `TEST_ASSERT_*`; script sensor behaviour via `MockIMU` (never real
-I2C in host tests).
+Rules:
+- Put suites under `test/<name>/` where `<name>` starts with `test_`.
+- Do **not** define your own `int main()` — PlatformIO auto-generates the Unity
+  runner for `test_*` suites. (If it does not in your env, supply one explicitly
+  and keep exactly one `main()` per suite.) Adding another `test_*` suite is
+  additive; adding a second `*.cpp` to an existing suite just adds tests.
+- Test functions named `test_*`; optional `setUp()` / `tearDown()` run around each.
+- Assert with `TEST_ASSERT_*`; script sensor behaviour via `MockIMU` (never real
+  I2C in host tests).
 
 ## Hardware in the loop — board availability & conflict avoidance
 

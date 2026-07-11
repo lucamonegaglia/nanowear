@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include "hardware_imu.h"
 #include "pedometer.h"
-#include "elapsed_timer.h"
 #include "state_machine.h"
 
 // ---------------------------------------------------------------------------
@@ -21,24 +20,27 @@ static HardwareIMU imu;
 static Pedometer pedometer(imu);
 static StateMachine tracker(2000); // poll the isolated HW counter every 2s while LOGGING
 
+// Throttle for the "not logging" diagnostic so it doesn't flood Serial.
+static unsigned long lastStateDiagMs = 0;
+
 void setup() {
     Serial.begin(115200);
 
     // Standard Arduino Wire bus.
     Wire.begin();
 
-    // Verify sensor presence via the high-level layer.
+    // Verify sensor presence + configure the embedded pedometer engine.
     if (!imu.begin()) {
-        Serial.println("Critical Error: Failed to find LSM6DSOX.");
-        while (1); // halt; no recovery path on this prototype
+        // No recovery path on this prototype: stay in BOOT so loop() surfaces a
+        // periodic diagnostic instead of silently halting the MCU.
+        Serial.println("Critical Error: Failed to find or configure LSM6DSOX.");
+        return;
     }
 
-    // Boot the hardware pedometer engine, then clear our accumulator.
-    imu.initHardwarePedometer();
+    // BOOT -> LOGGING. pedometer.reset() pairs with the PEDO_RST_STEP command
+    // issued inside imu.begin(), zeroing the firmware accumulator to match.
     pedometer.reset();
-
-    // BOOT -> LOGGING.
-    tracker.onBootComplete(millis());
+    tracker.startLogging(millis());
     Serial.println("[STATE] BOOT complete -> LOGGING");
 }
 
@@ -60,5 +62,17 @@ void loop() {
             Serial.print("[PEDOMETER] New steps this poll: ");
             Serial.println(delta);
         }
+        if (!pedometer.readOk()) {
+            Serial.println("[PEDOMETER] Warning: step-count read failed (I2C error).");
+        }
+    } else if (tracker.state() != TrackerState::LOGGING
+               && now - lastStateDiagMs >= 5000) {
+        // We are paused outside LOGGING (e.g. BOOT after a sensor failure, or a
+        // future SYNC/LOW_BATTERY state). Surface it so a stuck state is visible
+        // rather than silently dropping steps.
+        lastStateDiagMs = now;
+        Serial.print("[STATE] Not logging (");
+        Serial.print(static_cast<int>(tracker.state()));
+        Serial.println("); steps are not being recorded.");
     }
 }

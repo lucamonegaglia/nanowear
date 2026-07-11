@@ -106,7 +106,11 @@ Two valid paths; pick per §5.
 ## 3. Software roadmap
 
 ### S0 — IMU hardware pedometer ✅
-- `initHardwarePedometer()` / `getHardwareStepCount()` in `src/main.cpp` — done.
+- Embedded pedometer configured in `HardwareIMU::begin()` (which calls
+  `initHardwarePedometer()`); counts read via the `IMUSensor::readStepCount()`
+  interface in `src/hardware_imu.{h,cpp}`, behind the `IMUSensor` abstraction
+  (see `src/imu.h`). Transport errors are now surfaced rather than swallowed.
+  Done.
 - Close-out: sanity-check counts; confirm INT1 step-detection interrupt.
 
 ### S1 — Non-blocking state machine + sleep skeleton
@@ -224,7 +228,26 @@ e.g. on-device GPS fusion, custom haptics cues, or a branded UI):
 
 ---
 
-## 8. References
+## 8. Verification log
+
+How each change was verified (host tests + board build). Board hardware-e2e is
+**N/A** in CI — the Nano RP2040 Connect is a shared device with no default
+runner; run it by claiming the board via `scripts/board-lock.sh` and following
+the relevant close-out checks (e.g. H0/S0).
+
+### PR #3 — Harden IMU read path (surface transport failures, simplify interface)
+- **`pio test -e native`** — PASS (23/23: unit + simulated e2e in
+  `test/test_nanowear`; covers pedometer delta clamping, no-loss-on-read-failure,
+  and the e2e `loop()` simulation).
+- **`pio run -e nanorp2040connect`** — PASS (firmware builds for the board;
+  RAM 15.7% / Flash 0.2%).
+- **Hardware e2e on the Nano RP2040 Connect** — N/A in CI (no device on default
+  runner). To close: claim the board, flash, and confirm sane step counts +
+  INT1 step-detection (H0 close-out).
+
+---
+
+## 9. References
 
 - Arduino NINA firmware (`arduino/nina-fw`): https://github.com/arduino/nina-fw
 - Wi-Fi + BLE simultaneously on NINA boards (Arduino blog, Mar 2026):
