@@ -2,6 +2,7 @@
 #define NANOWEAR_BLE_PERIPHERAL_H
 
 #include <stdint.h>
+#include "gait_metrics.h"
 
 // ---------------------------------------------------------------------------
 // BlePeripheral — abstract view of the phone link
@@ -47,6 +48,12 @@ public:
     // Safe to call when no one is connected — the radio simply drops it.
     virtual void notifySteps(uint32_t totalSteps) = 0;
 
+    // Push the latest running-dynamics snapshot (one stride's worth of
+    // metrics) to subscribed centrals via the custom NanoWear dynamics
+    // characteristic. The SIG RSC service cannot carry these, so they go
+    // on a vendor characteristic instead (see running_dynamics_codec.h).
+    virtual void notifyGait(const GaitMetrics& m) = 0;
+
     // Register the callback fired when a central requests a step reset.
     virtual void onStepReset(StepResetCallback cb) = 0;
 
@@ -71,6 +78,8 @@ public:
     bool connected = false;
     uint32_t lastNotifiedSteps = 0;
     int notifyCallCount = 0;
+    GaitMetrics lastGait;          // last dynamics snapshot pushed
+    int gaitNotifyCount = 0;
     StepResetCallback resetCb = nullptr;
     int resetRequestsHandled = 0;
     const char* beginName = nullptr;
@@ -86,6 +95,11 @@ public:
     void notifySteps(uint32_t totalSteps) override {
         lastNotifiedSteps = totalSteps;
         notifyCallCount++;
+    }
+
+    void notifyGait(const GaitMetrics& m) override {
+        lastGait = m;
+        gaitNotifyCount++;
     }
 
     void onStepReset(StepResetCallback cb) override { resetCb = cb; }
