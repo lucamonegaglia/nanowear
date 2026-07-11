@@ -7,6 +7,19 @@ conventions with examples, the testing how-to, CI, the board-availability
 system, and agentic-development practices — lives here so the always-loaded
 system prompt doesn't bloat.
 
+## Quick start
+
+```bash
+# Build the firmware for the Nano RP2040 Connect
+pio run -e nanorp2040connect
+
+# Run the host unit + simulated end-to-end tests (no board needed)
+pio test -e native
+```
+
+PlatformIO is installed at `~/.platformio/penv/bin` (use `pio` from there, or
+`python3 -m platformio` if it is not on your PATH).
+
 ## Repository layout
 
 | Path | Purpose | Compiled on host (`native`)? |
@@ -16,44 +29,79 @@ system prompt doesn't bloat.
 | `src/pedometer.{h,cpp}` | Pure step-counting logic (total + delta) | **Yes** |
 | `src/elapsed_timer.h` | Non-blocking millisecond timer | **Yes** |
 | `src/step_codec.h` | Little-endian step-byte assembler | **Yes** |
-| `src/imu.h` | `IStepSensor` interface + `MockStepSensor` test double | **Yes** |
-| `test/*.cpp` | Native Unity suites (unit + simulated e2e) | n/a (test code) |
+| `src/state_machine.h` | Non-blocking `BOOT→IDLE→LOGGING→SYNC→LOW_BATTERY` | **Yes** |
+| `src/imu.h` | `IMUSensor` interface + `MockIMU` test double | **Yes** |
+| `test/host/*.cpp` | Native Unity suites (unit + simulated e2e) | n/a (test code) |
 | `scripts/board-lock.sh` | Claim/release the shared board for testing | n/a (tooling) |
 
-The key idea: **all hardware access lives behind the `IStepSensor` interface**,
-so the logic in `Pedometer` / `ElapsedTimer` / `combineStepBytes` is
-testable on the host with a `MockStepSensor` and no I2C. The board-only
-`HardwareIMU` and `main.cpp` are excluded from the native build.
+The key idea: **all hardware access lives behind the `IMUSensor` interface**,
+so the logic in `Pedometer` / `ElapsedTimer` / `StateMachine` /
+`combineStepBytes` is testable on the host with a `MockIMU` and no I2C. The
+board-only `HardwareIMU` and `main.cpp` are excluded from the native build.
 
-### Why the interface is `IStepSensor`, not `IMU`
+### Why the interface is `IMUSensor`, not `IMU`
 
-The `Arduino_LSM6DSOX` library exposes a **global object named `IMU`**.
-Naming our interface `IMU` collides with that symbol (the compiler mangles
-`Pedometer(IMU&)` and `HardwareIMU::begin()` breaks). The interface is
-therefore `IStepSensor` and the test double is `MockStepSensor`. The
-concrete `HardwareIMU::begin()` still calls the library's `IMU.begin()`.
+The `Arduino_LSM6DSOX` library `#define`s `IMU` to its global object
+(`#define IMU IMU_LSM6DSOX`). Naming our interface `IMU` would have that macro
+rewrite every `class IMU` / `IMU&` token in the board build into
+`IMU_LSM6DSOX`, breaking compilation. The interface is therefore `IMUSensor`
+and the test double is `MockIMU`. The concrete `HardwareIMU::begin()` still
+calls the library's `IMU.begin()`.
 
-## Branch, commit & PR conventions
+## Branch strategy
 
-- Branch from `main`; short-lived, one logical change each.
-  Prefixes: `feature/<slug>`, `fix/<slug>`, `chore/<slug>`.
+- Always branch from `main`.
+- Short-lived branches, one logical change each.
+- Naming convention:
+
+  | Prefix | Use |
+  |--------|-----|
+  | `feature/<slug>` | New capability or behaviour |
+  | `fix/<slug>` | Bug fix |
+  | `chore/<slug>` | Maintenance, deps, tooling |
+
+- Example:
   ```bash
   git switch -c feature/pedometer-unit-tests
   ```
-- Conventional Commits: `<type>(<scope>): <subject>` (imperative, ≤ 72 chars).
-  Types: `feat`, `fix`, `refactor`, `test`, `docs`, `ci`, `perf`, `chore`.
-  ```
-  feat(pedometer): expose per-poll step delta
-  test(native): add MockStepSensor run-loop simulation
-  ci: build firmware and run native tests on PR
-  refactor(imu): extract IStepSensor interface from main.cpp
-  ```
-- PRs: open as **draft**; mark ready once CI is green and self-reviewed.
-  Every PR must pass CI, add/update tests for behaviour changes, follow
-  `.github/pull_request_template.md`, and explain what/why/how-verified.
-  Self-review with `/code-review` before requesting human review.
+
+## Commit conventions (Conventional Commits)
+
+Format: `<type>(<scope>): <subject>` (subject imperative, ≤ 72 chars).
+
+| Type | Meaning |
+|------|---------|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `refactor` | Restructure without behaviour change |
+| `test` | Add/change tests |
+| `docs` | Documentation |
+| `ci` | CI / build changes |
+| `perf` | Performance |
+| `chore` | Misc maintenance |
+
+Examples:
+```
+feat(pedometer): expose per-poll step delta
+test(native): add MockIMU run-loop simulation
+ci: build firmware and run native tests on PR
+refactor(imu): extract IMUSensor interface from main.cpp
+```
+
+## Pull requests
+
+- Open as **draft** while in progress; mark *Ready for review* once CI is green
+  and you have self-reviewed.
+- Every PR must:
+  - Pass CI (firmware builds for the board **and** native tests pass).
+  - Add or update tests for any behaviour change.
+  - Follow the PR template (`.github/pull_request_template.md`).
+  - Explain *what* changed, *why*, and *how it was verified*.
+- Require at least one review. Use `/code-review` to self-review the diff
+  before requesting a human review.
+- Example end-to-end flow:
   ```bash
-  git commit -m "test(native): add MockStepSensor run-loop simulation"
+  git commit -m "test(native): add MockIMU run-loop simulation"
   git push -u origin feature/pedometer-unit-tests
   gh pr create --draft --fill
   ```
@@ -63,8 +111,11 @@ concrete `HardwareIMU::begin()` still calls the library's `IMU.begin()`.
 Three layers, cheapest first:
 
 1. **Unit tests (host, fast, no hardware)** — `pio test -e native`.
-   Pure logic in `Pedometer`, `ElapsedTimer`, `combineStepBytes`, driven by
-   `MockStepSensor`. Runs in CI on every push/PR — the primary safety net.
+   Pure logic in `Pedometer`, `ElapsedTimer`, `StateMachine`, and
+   `combineStepBytes`, driven by `MockIMU`. Runs in CI on every push/PR — the
+   primary safety net. Suites live in `test/host/`; the native env compiles
+   `src/*.cpp` (excluding `main.cpp` / `hardware_imu.cpp`) so the build stays
+   hardware-free.
 2. **Simulated end-to-end (host)** — a test that replays a *sequence* of
    hardware step readings through the exact `Pedometer.update()` call the
    firmware `loop()` makes, asserting the totals/deltas the firmware would print.
@@ -74,17 +125,17 @@ Three layers, cheapest first:
 
 ### Adding a test (example)
 
-Create `test/test_pedometer.cpp`:
+Create `test/host/test_pedometer.cpp`:
 
 ```cpp
 #include <unity.h>
 #include "pedometer.h"
 #include "imu.h"
 
-static MockStepSensor mock;
+static MockIMU mock;
 static Pedometer pedo(mock);
 
-void setUp(void) { mock = MockStepSensor(); pedo.reset(); }
+void setUp(void) { mock = MockIMU(); pedo.reset(); }
 
 // If the hardware counter ever reads lower than before (e.g. a missed reset),
 // the delta must clamp to zero rather than go negative.
@@ -97,29 +148,8 @@ void test_delta_clamped_when_counter_goes_backwards(void) {
 ```
 
 Rules: file `test_*.cpp`; functions `test_*`; optional `setUp()`/`tearDown()`;
-assert with `TEST_ASSERT_*`; script sensor behaviour via `MockStepSensor`
-(never real I2C in host tests).
-
-> **Native harness note:** `pio test -e native` runs the full host suite
-> (17 unit + simulated-e2e cases) and must stay green in CI. PlatformIO's
-> `pio test` does **not** emit a Unity test runner (the `main` that calls
-> `RUN_TEST`) for `platform = native` in this toolchain version, so the link
-> step would fail with `undefined reference to main`. The runner is supplied
-> explicitly in `test/main.cpp`; the board-only `HardwareIMU`/`main.cpp` are
-> excluded from the native build, so the three pure-logic modules
-> (`pedometer`, `elapsed_timer`, `step_codec`) plus `imu.h`/`MockStepSensor`
-> are what get exercised.
-
-## CI
-
-`.github/workflows/ci.yml` runs on `push` to `main` and every `pull_request`:
-1. Install PlatformIO.
-2. `pio run -e nanorp2040connect` — firmware compiles for the board.
-3. `pio test -e native` — unit + simulated e2e suites pass.
-
-A PR must be green before review. Hardware e2e is intentionally excluded
-from the default runner (no device attached to CI); enable it on a
-self-hosted runner when one is available.
+assert with `TEST_ASSERT_*`; script sensor behaviour via `MockIMU` (never real
+I2C in host tests).
 
 ## Hardware in the loop — board availability & conflict avoidance
 
@@ -132,9 +162,9 @@ pio device monitor -b 115200             # watch serial output
 ```
 
 It is the **only** physical board and a *shared* resource: two agents (or two
-terminals) flashing/monitoring at once collide — one upload clobbers the
-other and serial output interleaves. **Always claim before touching the board
-and release after.** Use `scripts/board-lock.sh`:
+terminals) flashing/monitoring at once collide — one upload clobbers the other
+and serial output interleaves. **Always claim before touching the board and
+release after.** Use `scripts/board-lock.sh`:
 
 ```bash
 # Before flashing / monitoring — fatal if someone else holds it:
@@ -154,9 +184,9 @@ and release after.** Use `scripts/board-lock.sh`:
 ```
 
 How it works:
-- The lock is a file under `.board/` (git-ignored) recording holder id,
-  pid, timestamp, and purpose. `claim`/`release` are serialised with
-  `flock`, so two agents can never both "win" a free board.
+- The lock is a file under `.board/` (git-ignored) recording holder id, pid,
+  timestamp, and purpose. `claim`/`release` are serialised with `flock`, so
+  two agents can never both "win" a free board.
 - A lock older than **30 minutes** is treated as *stale* (holder likely
   crashed) and is automatically reclaimable by the next `claim`.
 - `<agent_id>` must be unique to you — branch name, Claude Code session id,
@@ -172,20 +202,20 @@ human override.
 ## Agentic development practices
 
 Conventions for working on NanoWear with agents (Claude Code sub-agents,
-parallel sessions, or yourself driving the CLI):
+parallel sessions, or the CLI):
 
 - **One worktree per task.** Use a separate git worktree (Claude Code
   *worktree* mode, or `git worktree add`) per independent line of work.
   Parallel agents then never collide on the working tree and never commit to `main`.
 - **Host-test first; board last.** Run `pio test -e native` before any flash.
-  Most logic is testable through `IStepSensor` with `MockStepSensor`, so
-  the board is reserved for integration checks, not behaviour verification
-  you could have done on the host. This also reduces how often you need the lock.
+  Most logic is testable through `IMUSensor` with `MockIMU`, so the board is
+  reserved for integration checks, not behaviour verification you could have
+  done on the host. This also reduces how often you need the lock.
 - **Claim the board before touching it.** `claim` before `upload`/`monitor`,
   `release` immediately after. Don't leave the board locked longer than needed,
   and don't run a long `pio device monitor` in CI.
 - **Keep hardware behind the interface.** Add new sensor behaviour behind
-  `IStepSensor` (or a similarly injected seam) so it stays unit-testable
+  `IMUSensor` (or a similarly injected seam) so it stays unit-testable
   without the device. Prefer pure, time-injected modules (like `ElapsedTimer`)
   over `millis()`-coupled code.
 - **Small, reviewable PRs.** One logical change per branch; conventional commits;
@@ -197,3 +227,27 @@ parallel sessions, or yourself driving the CLI):
 - **Don't fight the lock.** If `check`/`claim` says the board is taken,
   either `claim … --wait` or move on to host-only work. Never bypass the
   lock by flashing directly.
+
+## Engineering principles (from AGENTS.md)
+
+- **Keep It Stupid Simple (KISS):** the smallest thing that works wins; resist
+  cleverness and premature structure.
+- **Don't Repeat Yourself (DRY):** extract shared logic once behind a clear
+  seam; never copy-paste across modules.
+- **Ponytail-style restraint:** before writing code, stop at the first rung
+  that holds — *needed at all? already here? in the standard library? a native
+  platform feature? an installed dependency? one line?* Only then write the
+  minimum. **Delete over add**, fewest files, shortest working diff; no
+  abstractions or dependencies nobody asked for. Laziness applies to
+  complexity, never to correctness, safety, or hardware calibration.
+
+## CI
+
+`.github/workflows/ci.yml` runs on `push` to `main` and every `pull_request`:
+1. Install PlatformIO.
+2. `pio run -e nanorp2040connect` — firmware compiles for the board.
+3. `pio test -e native` — unit + simulated e2e suites pass.
+
+A PR must be green before review. Hardware e2e is intentionally excluded from
+the default runner (no device attached to CI); enable it on a self-hosted
+runner when one is available.

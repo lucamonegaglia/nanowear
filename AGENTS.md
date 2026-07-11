@@ -13,7 +13,7 @@ This is an early-stage prototype. The board is the only hard constraint; most su
 - **Step counting:** Onboard ST **LSM6DSOX** 6-axis IMU, using its **embedded hardware pedometer** (Machine Learning Core), not a software step algorithm. See `src/main.cpp` for the register-level init (`FUNC_CFG_ACCESS` bank, `EMB_FUNC_EN_A` PEDO_EN, INT1 routing).
 - **Onboard RGB LED:** Driven through the **NINA module via `WiFiNINA.h`** using the constants `LEDR`, `LEDG`, `LEDB`. It is **common-anode / active-low**: `LOW` = ON, `HIGH` = OFF. No other pin definition is valid for this LED.
 - **Libraries already wired in `platformio.ini`:** `WiFiNINA`, `TinyGPSPlus`, `Arduino_LSM6DSOX`.
-- **Motion-sensor access behind an interface:** all firmware logic depends on the `IStepSensor` interface (`src/imu.h`), not on `Wire` directly. The board-only `HardwareIMU` is the only place that talks I2C. The `Arduino_LSM6DSOX` library exposes a global `IMU` object, which is why our interface is deliberately *not* named `IMU` (see `CONTRIBUTING.md` → *Repository layout*).
+- **Motion-sensor access behind an interface:** all firmware logic depends on the `IMUSensor` interface (`src/imu.h`), not on `Wire` directly. The board-only `HardwareIMU` is the only place that talks I2C. The `Arduino_LSM6DSOX` library exposes a global `IMU` object, which is why our interface is deliberately *not* named `IMU` (see `CONTRIBUTING.md` → *Repository layout*).
 - **Communication style (this assistant):** Neutral information provider. No praise, agreement, or meta-commentary about the user or their input — direct to the substantive answer or code.
 
 ## Scope vs. Open Questions (not yet committed)
@@ -66,7 +66,7 @@ documented in full in **[CONTRIBUTING.md](CONTRIBUTING.md)**:
   the PR template (`.github/pull_request_template.md`); self-review with
   `/code-review` before human review.
 - **Testing (3 layers):** (1) host unit tests `pio test -e native` via
-  `MockStepSensor`; (2) simulated end-to-end; (3) gated hardware e2e on
+  `MockIMU`; (2) simulated end-to-end; (3) gated hardware e2e on
   the board. See *Testing strategy* in CONTRIBUTING.md.
 - **CI:** `.github/workflows/ci.yml` builds the firmware and runs native
   tests on every push/PR.
@@ -83,6 +83,6 @@ monitoring and release after, via `scripts/board-lock.sh` (see
 
 Conventions for working here with agents (Claude Code sub-agents, parallel
 sessions, or the CLI): one worktree per task, host-test before any flash,
-claim the board before touching it, keep hardware behind the `IStepSensor`
+claim the board before touching it, keep hardware behind the `IMUSensor`
 interface, and small reviewable PRs. Full list in *Agentic development
 practices* (CONTRIBUTING.md).

@@ -13,14 +13,18 @@
 // Concrete IMU implementation. It performs the register-level configuration of
 // the sensor's embedded (hardware) pedometer and reads back the cumulative
 // step count. Compiled only for the real board; the native test env never sees
-// this file, which is why the testable logic lives behind the IStepSensor interface.
+// this file, which is why the testable logic lives behind the IMU interface.
 // ---------------------------------------------------------------------------
-class HardwareIMU : public IStepSensor {
+class HardwareIMU : public IMUSensor {
 public:
     bool begin() override;
     void writeRegister(uint8_t reg, uint8_t value) override;
     uint8_t readRegister(uint8_t reg) override;
     uint16_t readStepCount() override;
+
+    // Configure the LSM6DSOX embedded pedometer engine (call once after begin()).
+    // Public so main.cpp can drive the explicit BOOT -> LOGGING sequence; a
+    // later revision may fold this into begin().
     void initHardwarePedometer();
 
 private:

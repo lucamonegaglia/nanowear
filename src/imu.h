@@ -4,24 +4,26 @@
 #include <stdint.h>
 
 // ---------------------------------------------------------------------------
-// IStepSensor interface
+// IMU interface
 // ---------------------------------------------------------------------------
 // An abstract view of the motion sensor, decoupled from the concrete
 // LSM6DSOX driver. The firmware talks to the sensor only through this
 // interface, which lets the step-counting logic be unit-tested on the host
 // (native env) using a fake implementation instead of real I2C hardware.
 //
-// NOTE: this interface is deliberately NOT named `IMU` — the Arduino
-// LSM6DSOX library exposes a global `IMU` object, so reusing that
-// identifier would collide with the library's symbol.
+// NOTE: the class is deliberately named IMUSensor (not IMU) to avoid colliding
+// with the `IMU` macro that Arduino_LSM6DSOX.h #defines to its global object
+// (`#define IMU IMU_LSM6DSOX`). That macro would otherwise rewrite every
+// `class IMU` / `IMU&` token in the board build into `IMU_LSM6DSOX`, breaking
+// compilation. The name also keeps the test double MockIMU unambiguous.
 //
 // The production implementation (HardwareIMU) lives in hardware_imu.cpp and is
-// compiled only for the board. A test double (MockStepSensor) is provided
-// below so native tests stay hardware-free and deterministic.
+// compiled only for the board. A test double (MockIMU) is provided below so
+// native tests stay hardware-free and deterministic.
 // ---------------------------------------------------------------------------
-class IStepSensor {
+class IMUSensor {
 public:
-    virtual ~IStepSensor() = default;
+    virtual ~IMUSensor() = default;
 
     // Initialize the sensor. Returns true on success.
     virtual bool begin() = 0;
@@ -38,12 +40,12 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// MockStepSensor — test double for the host (native) unit tests
+// MockIMU — test double for the host (native) unit tests
 // ---------------------------------------------------------------------------
 // Records calls and returns scripted values. Tests assign `stepCount` and
 // assert on the call counters; no real hardware is touched.
 // ---------------------------------------------------------------------------
-class MockStepSensor : public IStepSensor {
+class MockIMU : public IMUSensor {
 public:
     bool beginCalled = false;
     bool beginResult = true;

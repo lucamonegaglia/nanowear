@@ -1,24 +1,20 @@
-## Summary
+## What changed
 
-<!-- What changed and why. One or two sentences. -->
+<!-- Describe the change in one or two sentences. -->
 
-## Changes
+## Why
 
--
+<!-- Motivation: which roadmap item / problem does this address? -->
 
-## How was this verified?
+## How it was verified
 
-- [ ] `pio run -e nanorp2040connect` builds the firmware
-- [ ] `pio test -e native` passes locally
-- [ ] CI is green
+<!-- e.g. `pio test -e native` passes; `pio run -e nanorp2040connect` builds;
+     flashed to board, serial shows N steps after shaking. -->
 
-## Test plan / Evidence
+- [ ] `pio test -e native` passes
+- [ ] `pio run -e nanorp2040connect` builds (or N/A)
+- [ ] Hardware verified on the Nano RP2040 Connect (or N/A)
 
-<!-- Paste native test output, or serial logs for board verification. -->
+## Risks / follow-ups
 
-## Checklist
-
-- [ ] Conventional-commit messages (`feat/fix/test/ci/...`)
-- [ ] Tests added/updated for any behaviour change
-- [ ] Docs (`CLAUDE.md` / `AGENTS.md`) updated if needed
-- [ ] Self-reviewed with `/code-review`
+<!-- Anything left open, board-prep steps needed (e.g. NINA flash), or next tasks. -->

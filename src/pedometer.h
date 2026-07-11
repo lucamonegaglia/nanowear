@@ -7,10 +7,10 @@
 // ---------------------------------------------------------------------------
 // Pedometer — hardware-step accumulator (pure logic)
 // ---------------------------------------------------------------------------
-// Consumes the absolute step count reported by the sensor's embedded pedometer
+// Consumes the absolute step count reported by the IMU's embedded pedometer
 // and derives the running total plus the per-poll delta. It contains no I2C,
 // no Serial and no millis(): all inputs are injected, so it is fully
-// unit-testable on the host via MockStepSensor.
+// unit-testable on the host via MockIMU.
 //
 // The IMU pedometer is already cumulative and monotonic, so a reset drives the
 // reported total back to zero. If the hardware counter is ever lower than the
@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 class Pedometer {
 public:
-    explicit Pedometer(IStepSensor& imu) : imu(imu) {}
+    explicit Pedometer(IMUSensor& imu) : imu(imu) {}
 
     // Reset cumulative state (e.g. right after the IMU's PEDO_RST_STEP command).
     void reset() { total = 0; }
@@ -36,7 +36,7 @@ public:
     uint16_t getTotal() const { return total; }
 
 private:
-    IStepSensor& imu;
+    IMUSensor& imu;
     uint16_t total = 0;
 };
 
