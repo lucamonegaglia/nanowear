@@ -61,6 +61,14 @@ bool HardwareIMU::begin() {
     return initHardwarePedometer();
 }
 
+void HardwareIMU::resetPedometerSteps() {
+    // Open the embedded-function config bank, pulse the PEDO_RST_STEP bit, and
+    // return to the default register page. Same register dance as init.
+    writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK);
+    writeRegister(PEDO_CMD_REG, 0x04);
+    writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK_CLOSE);
+}
+
 // Read the absolute, cumulative step count from the embedded pedometer.
 bool HardwareIMU::readStepCount(uint16_t& out) {
     // Open functional register access to read the computed metrics.
