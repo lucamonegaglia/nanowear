@@ -175,9 +175,11 @@ jobs:
               # Claude may fail; we verify the result instead of aborting.
               claude -p "$(cat "$PROMPTFILE")" "${CLAUDE_ARGS[@]}" > "$OUTFILE" 2>/dev/null || true
               rm -f "$PROMPTFILE"
-              # Strip a single surrounding markdown code fence if present.
+              # Strip a single surrounding markdown code fence ONLY when it is
+              # symmetric (first AND last line are fences), so we never delete
+              # a genuine last line of a file that merely opens with a fence.
               RESOLVED="$(mktemp)"
-              if head -n1 "$OUTFILE" | grep -q '^```'; then
+              if head -n1 "$OUTFILE" | grep -q '^```' && tail -n1 "$OUTFILE" | grep -q '^```'; then
                 sed '1d;$d' "$OUTFILE" > "$RESOLVED"
               else
                 cp "$OUTFILE" "$RESOLVED"
