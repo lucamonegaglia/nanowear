@@ -1,0 +1,178 @@
+name: Claude Auto-Resolve PR Conflicts
+
+# When a PR is merged into `main`, every other open PR targeting `main` may
+# suddenly conflict. This workflow re-checks those PRs in the background and,
+# for any that now conflict, asks Claude Code (headless) to resolve the
+# conflict markers and push the fix back to the PR branch — no new CLI session
+# required on your side.
+#
+# SETUP (repo Settings -> Secrets and variables -> Actions):
+#   Required: ANTHROPIC_API_KEY — an Anthropic key, OR an OpenRouter key.
+#             If you use OpenRouter, set OPENROUTER_API_KEY instead and also:
+#             ANTHROPIC_BASE_URL = https://openrouter.ai/api
+#             CLAUDE_MODEL       = tencent/hy3:free   (or your preferred slug)
+#   Optional: CLAUDE_CODE_VERSION — pin the CLI to match your local version.
+#   Also enable branch protection on `main` (the token can otherwise push to it).
+#
+# Trigger scope is intentionally limited to `closed` (merged). Do NOT add
+# `synchronize`/`push`: pushing the resolved branch fires `synchronize`, which
+# would re-trigger this workflow and ping-pong.
+on:
+  pull_request:
+    types: [closed]
+
+# We only need to read PRs and push to their branches.
+permissions:
+  contents: write
+  pull-requests: write
+
+# Avoid two merges racing to resolve the same set of PRs at once.
+concurrency:
+  group: resolve-conflicts
+  cancel-in-progress: false
+
+jobs:
+  resolve-conflicts:
+    # Only act when a PR was actually MERGED into the main branch.
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Claude Code CLI
+        # Pin CLAUDE_CODE_VERSION (a secret) to match the CLI you run locally,
+        # so provider/model quirks stay consistent between local and CI.
+        env:
+          CLAUDE_CODE_VERSION: ${{ secrets.CLAUDE_CODE_VERSION }}
+        run: npm install -g @anthropic-ai/claude-code${CLAUDE_CODE_VERSION:+@$CLAUDE_CODE_VERSION}
+
+      - name: Find and resolve conflicting open PRs
+        env:
+          # API key — Anthropic by default, OR an OpenRouter key. Falls back to
+          # OPENROUTER_API_KEY if ANTHROPIC_API_KEY is unset.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.OPENROUTER_API_KEY }}
+          # For OpenRouter / other proxies: the Anthropic-compatible base URL
+          # (OpenRouter uses https://openrouter.ai/api — NO /v1, the CLI adds it)
+          # and the model slug, e.g. tencent/hy3:free. Leave blank for Anthropic.
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_MODEL: ${{ secrets.CLAUDE_MODEL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          # Fast fail if the key is unset so we don't attempt Claude per PR.
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::No API key set. Add ANTHROPIC_API_KEY (or OPENROUTER_API_KEY) in repo Settings -> Secrets and Actions."
+            exit 1
+          fi
+
+          # Assemble the headless Claude invocation. ANTHROPIC_BASE_URL and
+          # ANTHROPIC_API_KEY are already in the step env; add --model only when
+          # a non-default model (e.g. an OpenRouter slug) is configured.
+          CLAUDE_ARGS=(--dangerously-skip-permissions --max-turns 12)
+          if [ -n "${CLAUDE_MODEL:-}" ]; then
+            CLAUDE_ARGS+=(--model "$CLAUDE_MODEL")
+          fi
+
+          git config --global user.name "claude-code-bot[bot]"
+          git config --global user.email "claude-code-bot@users.noreply.github.com"
+
+          # Prompt given to Claude for each conflicting PR. Keep it explicit:
+          # a merge is ALREADY in progress, preserve BOTH sides' intent, stage
+          # each fixed file, and never commit/push/run builds themselves.
+          RESOLVE_PROMPT='A `git merge origin/main` is already in progress and has left conflict markers (<<<<<<<, =======, >>>>>>>) in the working tree. Resolve EVERY file that contains markers by preserving the logical intent of BOTH sides: keep all meaningful changes, reconcile overlapping edits sensibly, and never silently drop either branch'"'"'s work. Do NOT run `git merge` again (a merge is already in progress), do NOT run build/test toolchains (they are unavailable in this environment), do NOT commit, and do NOT push. After fixing a file, stage it with `git add`. When no files remain in an unmerged state, stop. If a conflict is genuinely ambiguous or unsafe to resolve, leave it marked and stop.'
+
+          MERGED_PR="${{ github.event.pull_request.number }}"
+
+          # Collect open PRs targeting main. Fail loud if the API call errors
+          # (a silent empty list would make the job exit green doing nothing).
+          PR_JSON="$(gh pr list --base main --state open \
+            --json number,headRefName,isCrossRepository)" \
+            || { echo "::error::gh pr list failed"; exit 1; }
+
+          echo "$PR_JSON" | jq -c '.[]' | while read -r pr; do
+            PR_NUM="$(echo "$pr" | jq -r '.number')"
+            PR_BRANCH="$(echo "$pr" | jq -r '.headRefName')"
+            IS_XREPO="$(echo "$pr" | jq -r '.isCrossRepository')"
+
+            # We cannot push to a fork's branch, so skip cross-repo PRs.
+            if [ "$IS_XREPO" = "true" ]; then
+              echo "PR #$PR_NUM is from a fork; skipping (cannot push to fork branch)."
+              continue
+            fi
+
+            echo "::group::Inspecting PR #$PR_NUM ($PR_BRANCH)"
+
+            # Refresh refs. If the branch can't be fetched, skip it rather than
+            # silently operating on a stale/previous branch.
+            if ! git fetch origin "refs/heads/$PR_BRANCH:refs/remotes/origin/$PR_BRANCH"; then
+              echo "::warning::Could not fetch $PR_BRANCH; skipping."
+              echo "::endgroup::"
+              continue
+            fi
+            git fetch origin "refs/heads/main:refs/remotes/origin/main"
+
+            # Start from a clean copy of the PR branch.
+            git checkout -B "$PR_BRANCH" "origin/$PR_BRANCH"
+
+            # Drop untracked/ignored leftovers from a previous PR's Claude run.
+            git clean -fdx
+
+            # Attempt the merge. A clean outcome means no conflicts to fix.
+            if git merge --no-commit --no-ff origin/main >/dev/null 2>&1; then
+              echo "PR #$PR_NUM merges cleanly into main — nothing to do."
+              git merge --abort || true
+              echo "::endgroup::"
+              continue
+            fi
+
+            echo "PR #$PR_BRANCH conflicts with main — asking Claude to resolve."
+
+            # Strip any project config (.claude/, CLAUDE.md) from the merged
+            # tree so a malicious branch OR main cannot inject hooks/settings/
+            # instructions into the headless Claude run. (Branch protection on
+            # `main` is the second line of defense — see PR description.)
+            rm -rf .claude CLAUDE.md
+
+            claude -p "$RESOLVE_PROMPT" \
+              "${CLAUDE_ARGS[@]}"
+
+            # Any file still in an unmerged state => Claude could not finish.
+            UNMERGED="$(git diff --name-only --diff-filter=U)"
+            if [ -n "$UNMERGED" ]; then
+              echo "::error::Claude could not fully resolve conflicts in: $UNMERGED"
+              git merge --abort || true
+              gh pr comment "$PR_NUM" \
+                --body "⚠️ Automated conflict resolution failed after the merge of #$MERGED_PR (Claude could not safely resolve: $UNMERGED). Please resolve the conflicts manually." || true
+            else
+              # Guard against a FALSE-POSITIVE success: require a real merge in
+              # progress, at least one staged change, and no leftover markers.
+              if ! git rev-parse -q --verify MERGE_HEAD >/dev/null \
+                 || git diff --cached --quiet \
+                 || [ -n "$(git diff --cached -G '<<<<<<<' --name-only)" ]; then
+                echo "::error::Merge not completed or leftover conflict markers; not pushing."
+                git merge --abort || true
+                gh pr comment "$PR_NUM" \
+                  --body "⚠️ Automated conflict resolution did not complete cleanly after the merge of #$MERGED_PR. Please resolve the conflicts manually." || true
+              else
+                git commit -m "chore: auto-resolve merge conflicts with main via Claude Code" \
+                  -m "Triggered by merge of #$MERGED_PR."
+                if git push origin "$PR_BRANCH"; then
+                  gh pr comment "$PR_NUM" \
+                    --body "✅ Merge conflicts with \`main\` were automatically resolved by Claude Code after the merge of #$MERGED_PR. Please re-review." || true
+                else
+                  echo "::error::Push to $PR_BRANCH failed (branch protection?)."
+                  git merge --abort || true
+                fi
+              fi
+            fi
+
+            echo "::endgroup::"
+          done
