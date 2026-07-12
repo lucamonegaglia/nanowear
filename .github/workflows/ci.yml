@@ -29,6 +29,10 @@ jobs:
       - name: Run native unit tests
         run: pio test -e native
 
-      # Hardware end-to-end (flash + serial check on the physical board) is
-      # intentionally NOT here: CI has no device attached. Enable it on a
-      # self-hosted runner when one is available.
+      # Hardware end-to-end (flash + per-feature serial check on the physical
+      # board) is intentionally NOT here: GitHub's cloud runners have no device
+      # attached. It is run locally on the dev PC the Nano is wired to, via
+      # `./scripts/flash-verify.sh` (claim board -> build -> flash -> run the
+      # tests/e2e/ per-feature harness). See CONTRIBUTING.md -> Testing strategy.
+      # To move this into CI, register a GitHub self-hosted runner on that PC and
+      # add a `runs-on: [self-hosted, linux]` job that calls flash-verify.sh.

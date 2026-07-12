@@ -66,10 +66,14 @@ documented in full in **[CONTRIBUTING.md](CONTRIBUTING.md)**:
   the PR template (`.github/pull_request_template.md`); self-review with
   `/code-review` before human review.
 - **Testing (3 layers):** (1) host unit tests `pio test -e native` via
-  `MockIMU`; (2) simulated end-to-end; (3) gated hardware e2e on
-  the board. See *Testing strategy* in CONTRIBUTING.md.
+  `MockIMU`; (2) simulated end-to-end; (3) **on-device e2e** — flash the board
+  and run one test per feature that asserts its serial debug output appears, via
+  `./scripts/flash-verify.sh` + `tests/e2e/`. See *Testing strategy* in
+  CONTRIBUTING.md. **Each new feature must ship its own `tests/e2e/test_<feature>.py`.**
 - **CI:** `.github/workflows/ci.yml` builds the firmware and runs native
-  tests on every push/PR.
+  tests on every push/PR. CI cannot flash (no device in the cloud); hardware
+  e2e is run locally via `scripts/flash-verify.sh` on the dev PC the board is
+  wired to.
 
 ## Hardware in the loop
 
@@ -78,6 +82,16 @@ firmware can be flashed and verified on real hardware here. It is the
 **only** board and a *shared* resource — claim it before flashing or
 monitoring and release after, via `scripts/board-lock.sh` (see
 *Hardware in the loop* in CONTRIBUTING.md). Host-test first; board last.
+
+To flash the board and run the per-feature on-device tests in one shot:
+
+```bash
+./scripts/flash-verify.sh          # claim -> build -> flash -> run tests/e2e
+```
+
+It prints the board's serial output live (the serial terminal monitor) and
+fails the run if any feature's debug output does not appear. Re-run tests
+without re-flashing with `./scripts/flash-verify.sh --no-flash`.
 
 ## Agentic development
 

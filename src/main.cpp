@@ -52,6 +52,15 @@ void loop() {
     if (tracker.shouldPoll(now)) {
         tracker.markPolled(now);
 
+        // Boot sentinel, re-emitted on every LOGGING poll. The on-device e2e
+        // harness (scripts/flash-verify.sh -> tests/e2e) keys on this exact line
+        // to confirm the firmware reached LOGGING. It is emitted every poll
+        // (not just once at boot) so the harness captures it no matter when the
+        // serial monitor attaches — a one-shot line printed before the host
+        // opens the port would be lost, making the boot test flaky. See
+        // tests/e2e/README.md.
+        Serial.println("[NW] BOOT_OK");
+
         uint16_t delta = pedometer.update();
         uint16_t total = pedometer.getTotal();
 
