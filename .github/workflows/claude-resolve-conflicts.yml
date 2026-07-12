@@ -6,6 +6,14 @@ name: Claude Auto-Resolve PR Conflicts
 # conflict markers and push the fix back to the PR branch — no new CLI session
 # required on your side.
 #
+# SETUP (repo Settings -> Secrets and variables -> Actions):
+#   Required: ANTHROPIC_API_KEY — an Anthropic key, OR an OpenRouter key.
+#             If you use OpenRouter, set OPENROUTER_API_KEY instead and also:
+#             ANTHROPIC_BASE_URL = https://openrouter.ai/api
+#             CLAUDE_MODEL       = tencent/hy3:free   (or your preferred slug)
+#   Optional: CLAUDE_CODE_VERSION — pin the CLI to match your local version.
+#   Also enable branch protection on `main` (the token can otherwise push to it).
+#
 # Trigger scope is intentionally limited to `closed` (merged). Do NOT add
 # `synchronize`/`push`: pushing the resolved branch fires `synchronize`, which
 # would re-trigger this workflow and ping-pong.
@@ -39,21 +47,38 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+        # Pin CLAUDE_CODE_VERSION (a secret) to match the CLI you run locally,
+        # so provider/model quirks stay consistent between local and CI.
+        env:
+          CLAUDE_CODE_VERSION: ${{ secrets.CLAUDE_CODE_VERSION }}
+        run: npm install -g @anthropic-ai/claude-code${CLAUDE_CODE_VERSION:+@$CLAUDE_CODE_VERSION}
 
       - name: Find and resolve conflicting open PRs
         env:
-          # Required repository secret: a Claude API key (Settings -> Secrets).
-          # If it is missing the job fails fast rather than burning a run.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # API key — Anthropic by default, OR an OpenRouter key. Falls back to
+          # OPENROUTER_API_KEY if ANTHROPIC_API_KEY is unset.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.OPENROUTER_API_KEY }}
+          # For OpenRouter / other proxies: the Anthropic-compatible base URL
+          # (OpenRouter uses https://openrouter.ai/api — NO /v1, the CLI adds it)
+          # and the model slug, e.g. tencent/hy3:free. Leave blank for Anthropic.
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_MODEL: ${{ secrets.CLAUDE_MODEL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
 
           # Fast fail if the key is unset so we don't attempt Claude per PR.
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "::error::ANTHROPIC_API_KEY secret is not set. Add it in repo Settings -> Secrets and Actions."
+            echo "::error::No API key set. Add ANTHROPIC_API_KEY (or OPENROUTER_API_KEY) in repo Settings -> Secrets and Actions."
             exit 1
+          fi
+
+          # Assemble the headless Claude invocation. ANTHROPIC_BASE_URL and
+          # ANTHROPIC_API_KEY are already in the step env; add --model only when
+          # a non-default model (e.g. an OpenRouter slug) is configured.
+          CLAUDE_ARGS=(--dangerously-skip-permissions --max-turns 12)
+          if [ -n "${CLAUDE_MODEL:-}" ]; then
+            CLAUDE_ARGS+=(--model "$CLAUDE_MODEL")
           fi
 
           git config --global user.name "claude-code-bot[bot]"
@@ -117,8 +142,7 @@ jobs:
             rm -rf .claude CLAUDE.md
 
             claude -p "$RESOLVE_PROMPT" \
-              --dangerously-skip-permissions \
-              --max-turns 12
+              "${CLAUDE_ARGS[@]}"
 
             # Any file still in an unmerged state => Claude could not finish.
             UNMERGED="$(git diff --name-only --diff-filter=U)"
