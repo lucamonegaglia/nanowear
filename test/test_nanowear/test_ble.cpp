@@ -112,6 +112,25 @@ void test_mock_reset_callback_invoked(void) {
     TEST_ASSERT_EQUAL_INT(1, mock.resetRequestsHandled);
 }
 
+// --- rsc_codec: cadence derivation (pure helper behind notifySteps) ----------
+void test_derive_cadence_zero_interval(void) {
+    // No time elapsed (or sub-second) -> undefined rate -> 0, never divide-by-0.
+    TEST_ASSERT_EQUAL_UINT16(0, deriveCadenceSpm(0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0, deriveCadenceSpm(10, 0));
+    TEST_ASSERT_EQUAL_UINT16(0, deriveCadenceSpm(10, 500));
+}
+void test_derive_cadence_basic(void) {
+    // 6 steps in 2 s -> 3 steps/s -> 180 spm; 3 steps in 2 s -> 90 spm;
+    // 1 step in 1 s -> 60 spm.
+    TEST_ASSERT_EQUAL_UINT16(180, deriveCadenceSpm(6, 2000));
+    TEST_ASSERT_EQUAL_UINT16(90,  deriveCadenceSpm(3, 2000));
+    TEST_ASSERT_EQUAL_UINT16(60,  deriveCadenceSpm(1, 1000));
+}
+void test_derive_cadence_zero_delta(void) {
+    // Time passing with no new steps -> 0 spm (not a divide error).
+    TEST_ASSERT_EQUAL_UINT16(0, deriveCadenceSpm(0, 2000));
+}
+
 // ---------------------------------------------------------------------------
 // NOTE: the RUN_TEST(...) registrations for the tests above live in
 // test/test_nanowear.cpp's single main() so there is exactly one runner.

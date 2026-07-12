@@ -17,5 +17,8 @@ void test_mock_begin_can_fail(void);
 void test_mock_connection_reflects_flag(void);
 void test_mock_notify_records_last_value(void);
 void test_mock_reset_callback_invoked(void);
+void test_derive_cadence_zero_interval(void);
+void test_derive_cadence_basic(void);
+void test_derive_cadence_zero_delta(void);
 
 #endif // NANOWEAR_TEST_BLE_H

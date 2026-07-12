@@ -226,5 +226,10 @@ int main(void) {
     RUN_TEST(test_mock_connection_reflects_flag);
     RUN_TEST(test_mock_notify_records_last_value);
     RUN_TEST(test_mock_reset_callback_invoked);
+
+    // --- BLE link: cadence derivation helper ---------------------------------
+    RUN_TEST(test_derive_cadence_zero_interval);
+    RUN_TEST(test_derive_cadence_basic);
+    RUN_TEST(test_derive_cadence_zero_delta);
     return UNITY_END();
 }

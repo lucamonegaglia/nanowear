@@ -92,22 +92,23 @@ bool ArduinoBlePeripheral::isConnected() const {
 void ArduinoBlePeripheral::notifySteps(uint32_t totalSteps) {
     if (!begun) return; // nothing to notify on until BLE is up
 
-    // Derive cadence (steps/min) from the time since the previous push.
+    // Derive cadence (steps/min) from the step delta since the last push.
+    // The cadence maths is a pure host-testable helper (see rsc_codec.h).
     unsigned long now = millis();
-    uint16_t cadenceSpm = 0;
-    if (lastNotifyMs != 0 && now > lastNotifyMs) {
-        uint32_t delta = (totalSteps > lastTotalSteps)
-                             ? (totalSteps - lastTotalSteps)
-                             : 0;
-        unsigned long dtSec = (now - lastNotifyMs) / 1000;
-        if (dtSec > 0) {
-            // uint64_t to avoid overflow when delta is large (defensive).
-            cadenceSpm = static_cast<uint16_t>(
-                static_cast<uint64_t>(delta) * 60 / dtSec);
-        }
-    }
+    uint32_t dtMs = (lastNotifyMs != 0 && now > lastNotifyMs)
+                        ? static_cast<uint32_t>(now - lastNotifyMs)
+                        : 0;
+    uint32_t delta = (totalSteps > lastTotalSteps)
+                         ? (totalSteps - lastTotalSteps)
+                         : 0;
+    uint16_t cadenceSpm = deriveCadenceSpm(delta, dtMs);
     lastTotalSteps = totalSteps;
     lastNotifyMs = now;
+
+    // Skip the radio churn when no central is connected; we still keep the
+    // cadence bookkeeping above current so the first notify after connect is
+    // correct and we don't replay a huge artificial starting delta.
+    if (!s_connected) return;
 
     // RSC Measurement: flags=0 (cadence only), speed=0 (unavailable).
     uint8_t rsc[4];

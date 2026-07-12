@@ -18,6 +18,13 @@ Requires root on Linux (BlueZ D-Bus). Ctrl-C to stop.
 
 The characteristics mirror src/rsc_codec.h + src/ble_peripheral_arduino.cpp:
   RSC Service 0x1814
+  ...
+
+LOCKSTEP WARNING: encode_rsc()/encode_steps() below must stay byte-for-byte
+consistent with the C++ encoders in src/rsc_codec.h (encodeRscMeasurement /
+encodeStepCount) and the cadence derivation deriveCadenceSpm(). If you change a
+GATT UUID or the payload layout in the firmware, change it here too — a phone
+app getting a different byte order will silently misread steps/cadence.
     - RSC Measurement 0x2A53  Notify : flags + speed(0) + cadence
     - RSC Feature     0x2A54  Read   : 0x0000 (cadence only)
     - Sensor Location  0x2A5D  Read   : 0x03 (Foot / ankle)
@@ -108,7 +115,7 @@ async def main():
             await asyncio.sleep(2)
             # Simulate walking: 0..40 new steps per 2s.
             STATE["steps"] += random.randint(0, 40)
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
             await server.update_value(RSC_SERVICE, RSC_MEASUREMENT, encode_rsc(STATE["steps"], now))
             await server.update_value(NANO_SERVICE, NANO_STEPS, encode_steps(STATE["steps"]))
             print(f"[emulator] steps={STATE['steps']}")

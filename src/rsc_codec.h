@@ -41,6 +41,21 @@ inline uint8_t cadenceToRscUnits(uint16_t stepsPerMinute) {
     return static_cast<uint8_t>(units > 255 ? 255 : units);
 }
 
+// Derive cadence (steps/minute) from the step delta over a time interval.
+// This is the pure number-crunching half of notifySteps() pulled out so it is
+// host-testable without a board or radio (see test/test_nanowear/test_ble.cpp).
+//   delta = steps accrued since the previous sample
+//   dtMs  = elapsed milliseconds for that delta
+// Returns 0 when dtMs is 0 or sub-second (too short to give a stable rate) and
+// uses uint64_t for the multiply so a large delta can't overflow the uint32.
+inline uint16_t deriveCadenceSpm(uint32_t delta, uint32_t dtMs) {
+    if (dtMs == 0) return 0;
+    uint32_t dtSec = dtMs / 1000;     // integer seconds; sub-second -> 0
+    if (dtSec == 0) return 0;
+    return static_cast<uint16_t>(
+        static_cast<uint64_t>(delta) * 60 / dtSec);
+}
+
 // Encode the minimal RSC Measurement payload: [flags, speedLo, speedHi, cadence].
 // Speed is always present in the RSC Measurement (it is not flag-gated) and is
 // written as 0 = 0.0 m/s (stationary), because the ankle unit measures steps,

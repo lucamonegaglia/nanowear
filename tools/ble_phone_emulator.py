@@ -17,6 +17,11 @@ Examples:
   sudo python3 ble_phone_emulator.py                 # scan for "NanoWear"
   sudo python3 ble_phone_emulator.py --address XX:XX:XX:XX:XX:XX
   sudo python3 ble_phone_emulator.py --name NanoWear --reset
+
+LOCKSTEP WARNING: decode_rsc()/decode_steps() below must stay consistent with
+the C++ encoders in src/rsc_codec.h (encodeRscMeasurement / encodeStepCount).
+The byte layout here is the *exact* inverse of what the firmware writes, so if
+you change a UUID or payload format in the firmware, mirror it here.
 """
 
 import argparse
