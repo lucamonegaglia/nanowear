@@ -40,6 +40,11 @@ public:
     // pedometer engine. The engine is cumulative and saturates at 65535.
     // Returns false on a transport error; in that case `out` is left unchanged.
     virtual bool readStepCount(uint16_t& out) = 0;
+
+    // Zero the embedded pedometer's step counter (PEDO_RST_STEP), leaving the
+    // pedometer algorithm enabled. Used by the debug "reset to zero" command so
+    // a fresh walk starts from a known baseline. Returns true on success.
+    virtual bool resetStepCount() = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -54,6 +59,7 @@ public:
     bool beginResult = true;
     uint16_t stepCount = 0;
     bool readStepCountResult = true;
+    bool resetStepCountResult = true;
 
     bool begin() override {
         return beginResult;
@@ -62,6 +68,10 @@ public:
     bool readStepCount(uint16_t& out) override {
         out = stepCount;
         return readStepCountResult;
+    }
+
+    bool resetStepCount() override {
+        return resetStepCountResult;
     }
 };
 

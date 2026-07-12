@@ -10,11 +10,16 @@
 // Formalises the flat poll loop into a small state machine:
 //
 //        BOOT ──startLogging──▶ LOGGING ──requestSync──▶ SYNC
-//                                  ▲                        │
-//                                  │ syncComplete          │
-//                                  └────────────────────────┘
+//                                  │ ▲                     │
+//                       enterDebug │ │ resumeLogging       │ syncComplete
+//                                  ▼ │                     │
+//                                DEBUG◀────────────────────┘
 //
 //        (any active state) ──enterLowBattery──▶ LOW_BATTERY ──recover──▶ LOGGING
+//
+// DEBUG is the developer "debug mode": it pauses polling so the in-RAM step log
+// can be inspected/extracted over USB Serial without new entries arriving
+// mid-transfer. It is not the production phone/Strava sync path.
 //
 // It is driven entirely by injected time (`now`) plus explicit events, so the
 // transition logic is fully unit-testable on the host with no board. The board
@@ -25,7 +30,8 @@ enum class TrackerState : uint8_t {
     BOOT,        // power-up / sensor init; never polls
     LOGGING,     // accumulating steps; polls the pedometer on an interval
     SYNC,        // (future) transferring the backlog to a phone over BLE
-    LOW_BATTERY  // (future) critical battery; halts logging, may signal
+    LOW_BATTERY, // (future) critical battery; halts logging, may signal
+    DEBUG        // dev mode: polling paused for USB-Serial log extraction
 };
 
 class StateMachine {
@@ -71,6 +77,21 @@ public:
     // LOW_BATTERY -> LOGGING once charged/recovered (future).
     void recover(unsigned long now) {
         if (st == TrackerState::LOW_BATTERY) {
+            enterLogging(now);
+        }
+    }
+
+    // LOGGING -> DEBUG: pause polling for USB-Serial log extraction. Steps taken
+    // while paused are not lost — they are recovered as a single catch-up entry
+    // on resume (the hardware counter keeps running; shouldPoll() already gates
+    // on LOGGING, so entering DEBUG automatically halts polling).
+    void enterDebug() {
+        if (st == TrackerState::LOGGING) st = TrackerState::DEBUG;
+    }
+
+    // DEBUG -> LOGGING: resume polling; re-arms the poll timer.
+    void resumeLogging(unsigned long now) {
+        if (st == TrackerState::DEBUG) {
             enterLogging(now);
         }
     }
