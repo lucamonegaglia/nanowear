@@ -139,6 +139,7 @@ void loop() {
         // Push the latest total to any connected phone (Notify + custom char).
         ble.notifySteps(total);
     } else if (tracker.state() != TrackerState::LOGGING
+               && tracker.state() != TrackerState::DEBUG
                && now - lastStateDiagMs >= 5000) {
         // We are paused outside LOGGING (e.g. BOOT after a sensor failure, or a
         // future SYNC/LOW_BATTERY state). Surface it so a stuck state is visible

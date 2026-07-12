@@ -37,12 +37,21 @@ void DebugConsole::cmdClear() {
 }
 
 void DebugConsole::cmdReset() {
-    imu.resetStepCount(); // zero the hardware pedometer counter
+    // Only zero the firmware accumulator + log after the HARDWARE counter has
+    // actually been reset. If the I2C write to PEDO_CMD_REG fails, leaving the
+    // FW total at 0 while the HW counter keeps its old value would make the next
+    // update() report a bogus delta equal to the whole hardware total (the exact
+    // failure mode pedometer.h warns about).
+    if (!imu.resetStepCount()) {
+        Serial.println("[ERROR] step-counter hardware reset failed (I2C error)");
+        return;
+    }
     pedo.reset();         // zero the firmware accumulator
     log.clear();          // drop the old history
-    // Already LOGGING, so don't re-enter it (startLogging only acts from BOOT);
-    // just re-arm the poll timer so the next sample is a clean 2s later.
-    sm.markPolled(millis());
+    // Resume LOGGING if we were paused in DEBUG; otherwise (already LOGGING) just
+    // re-arm the poll timer so the next sample is a clean 2s later.
+    if (sm.state() == TrackerState::DEBUG) sm.resumeLogging(millis());
+    else sm.markPolled(millis());
     Serial.println("[OK] step counters and log reset to 0");
 }
 

@@ -93,8 +93,11 @@ def dump(ser, out):
         print(f"[dump_log] wrote {len(rows)} log rows -> {out}")
     else:
         print(text)
-    # Resume logging so the board keeps tracking after the transfer.
+    # Resume logging so the board keeps tracking after the transfer, then drain
+    # the ack so it doesn't interleave with the next command/session.
     send(ser, "g")
+    time.sleep(0.2)
+    ser.read_all()
     return rows
 
 
