@@ -69,9 +69,6 @@ void handleStepReset() {
     Serial.println("[BLE] Step reset requested by phone");
 }
 
-// Throttle for the "not logging" diagnostic so it doesn't flood Serial.
-static unsigned long lastStateDiagMs = 0;
-
 // ---------------------------------------------------------------------------
 // Core0 — BLE, LED, phone link (no I2C here)
 // ---------------------------------------------------------------------------
@@ -80,9 +77,6 @@ void setup() {
 
     // Spinlock for the cross-core snapshot (init before any core1 use).
     g_lock = spin_lock_init(0);
-
-    // Standard Arduino Wire bus (Core1 drives it; just initialise here).
-    Wire.begin();
 
     // Report the NINA module firmware version. BLE over the NINA-W102
     // requires firmware >= 3.0.1 (see docs/BLE_SETUP.md).
@@ -125,21 +119,17 @@ void loop() {
         if (gaitNew)  ble.notifyGait(g);
         if (stepsNew) ble.notifySteps(steps);
     }
-
-    // Surface a stuck (non-LOGGING) state so it is visible, not silent.
-    if (tracker.state() != TrackerState::LOGGING
-            && millis() - lastStateDiagMs >= 5000) {
-        lastStateDiagMs = millis();
-        Serial.print("[STATE] Not logging (");
-        Serial.print(static_cast<int>(tracker.state()));
-        Serial.println("); steps are not being recorded.");
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Core1 — IMU owner: FIFO drain -> detector -> shared snapshot
 // ---------------------------------------------------------------------------
 void setup1() {
+    // Wire is initialised HERE (Core1), not in Core0's setup(): all I2C
+    // transactions run on Core1, so the bus must be brought up on the core
+    // that drives it — otherwise imu.begin() below can race ahead of a
+    // Core0 Wire.begin() and fail intermittently.
+    Wire.begin();
     // Bump I2C to 1 MHz (fast-mode+) so FIFO burst reads are quick.
     Wire.setClock(1000000);
 
@@ -164,15 +154,29 @@ void loop1() {
     static uint8_t  fifoBuf[768];   // 64 samples * 12 B
     static ImuSample samples[64];
     static uint32_t  tsBase = 0;
+    static unsigned long lastStateDiagMs = 0;
 
     unsigned long now = millis();
+
+    // Surface a stuck (non-LOGGING) state so it is visible, not silent.
+    // Runs on Core1 alongside the StateMachine, so no cross-core lock needed.
+    if (tracker.state() != TrackerState::LOGGING
+            && now - lastStateDiagMs >= 5000) {
+        lastStateDiagMs = now;
+        Serial.print("[STATE] Not logging (");
+        Serial.print(static_cast<int>(tracker.state()));
+        Serial.println("); steps are not being recorded.");
+    }
 
     // 1) Drain the FIFO on a fixed cadence (non-blocking; no delay()).
     if (fifoTimer.hasElapsed(now)) {
         fifoTimer.reset(now);
 
+        // FIFO_STATUS1 DIFF_FIFO is 6-bit (max ~10 samples/read at 1.66 kHz),
+        // so a single read per tick would overflow the 3 KB buffer and drop
+        // samples. Drain in a loop until empty; tsBase chains across reads.
         size_t filled = 0;
-        if (imu.read(fifoBuf, sizeof(fifoBuf), filled) && filled > 0) {
+        while (imu.read(fifoBuf, sizeof(fifoBuf), filled) && filled > 0) {
             size_t n = decodeFifo(fifoBuf, filled,
                                    imu.fifoPattern(), imu.accelScale(),
                                    imu.gyroScale(), imu.samplePeriodMs(),

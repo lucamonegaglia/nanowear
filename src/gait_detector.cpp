@@ -55,7 +55,6 @@ void GaitDetector::configureFilters(float fs) {
     auto norm = [&](float c) { return c / a0; };
     lpPitch.b0 = norm(b0);   lpPitch.b1 = norm(b1);   lpPitch.b2 = norm(b2);
     lpPitch.a1 = norm(a1);   lpPitch.a2 = norm(a2);
-    lpAccel = lpPitch; lpForeAft = lpPitch;   // same cut-off for all
 }
 
 // --- Calibration -------------------------------------------------------
@@ -66,15 +65,8 @@ void GaitDetector::calibrate(const ImuSample& s) {
 
     if (calCount == kCalSamples - 1) {
         const float n = static_cast<float>(kCalSamples);
-        // Pitch axis = gyro axis with the largest variance (dominant foot rotation).
-        const float vx = calGx2 / n - (calGx / n) * (calGx / n);
-        const float vy = calGy2 / n - (calGy / n) * (calGy / n);
-        const float vz = calGz2 / n - (calGz / n) * (calGz / n);
-        if (vx >= vy && vx >= vz)      pitchAxis = 0;
-        else if (vy >= vx && vy >= vz) pitchAxis = 1;
-        else                              pitchAxis = 2;
-
-        // Gravity direction in sensor frame (unit) from the mean accel.
+        // Gravity direction in sensor frame (unit) from the mean accel during
+        // the stillness window. (Pitch axis is chosen later, from motion.)
         const float gx = calAx / n, gy = calAy / n, gz = calAz / n;
         const float gn = sqrtf(gx * gx + gy * gy + gz * gz);
         if (gn > 1e-6f) {
@@ -86,7 +78,6 @@ void GaitDetector::calibrate(const ImuSample& s) {
 // --- Per-stride reset ------------------------------------------------
 void GaitDetector::resetStrideWindow(uint32_t ts) {
     strideActive = true;
-    strideStartTs = ts;
     posZmin = posZmax = posZ;   // detrend: rebaseline the oscillation window
     braking = false;
     brakeAccum = 0;
@@ -98,9 +89,34 @@ bool GaitDetector::process(const ImuSample& s) {
     if (!calibrated) {
         calibrate(s);
         calCount++;
-        if (calCount >= kCalSamples) calibrated = true;
+        if (calCount >= kCalSamples) {
+            calibrated = true;
+            axisG[0] = axisG[1] = axisG[2] = 0;   // start motion-window accum
+            axisG2[0] = axisG2[1] = axisG2[2] = 0;
+            axisN = 0;
+        }
         lastTs = s.ts;
         return false;   // no stride output during the stillness window
+    }
+
+    // Pick the dominant-rotation (pitch) axis from the first kAxisSamples of
+    // real motion, so mounting-agnostic selection tracks gait, not stillness.
+    if (!axisChosen) {
+        axisG[0]  += s.gx; axisG[1]  += s.gy; axisG[2]  += s.gz;
+        axisG2[0] += s.gx * s.gx; axisG2[1] += s.gy * s.gy; axisG2[2] += s.gz * s.gz;
+        axisN++;
+        if (axisN >= kAxisSamples) {
+            const float n = static_cast<float>(kAxisSamples);
+            const float vx = axisG2[0] / n - (axisG[0] / n) * (axisG[0] / n);
+            const float vy = axisG2[1] / n - (axisG[1] / n) * (axisG[1] / n);
+            const float vz = axisG2[2] / n - (axisG[2] / n) * (axisG[2] / n);
+            if (vx >= vy && vx >= vz)      pitchAxis = 0;
+            else if (vy >= vx && vy >= vz) pitchAxis = 1;
+            else                              pitchAxis = 2;
+            axisChosen = true;
+        }
+        lastTs = s.ts;
+        return false;   // still settling the pitch axis
     }
 
     // dt from sample timestamps (fall back to ODR if absent/invalid).
@@ -179,11 +195,6 @@ bool GaitDetector::handlePitchMin(uint32_t ts, float /*pr*/, float pitchNow,
         pitchAtIc = pitchNow;
         haveIc = true;
 
-        // Open the braking-capture window for this stance.
-        braking = true;
-        brakeAccum = 0;
-        brakeWindowEnd = ts + static_cast<uint32_t>(kBrakeWindowMs);
-
         // A stride is complete once we have a prior IC and the TC between.
         if (haveIc && haveTc) {
             const float step    = static_cast<float>(icTs - prevIcTs);
@@ -199,20 +210,32 @@ bool GaitDetector::handlePitchMin(uint32_t ts, float /*pr*/, float pitchNow,
                 m.airTimeMs          = (step > contact) ? (step - contact) : 0.f;
                 m.cadenceSpm         = 60000.f / step;
                 m.verticalOscillationMm = (posZmax - posZmin) * 1000.f;
-                const float p = pitchAtIc * kPitchSign;
-                if (p > kStrikeThreshDeg)       m.strike = StrikePattern::REARFOOT;
-                else if (p < -kStrikeThreshDeg) m.strike = StrikePattern::FOREFOOT;
-                else                              m.strike = StrikePattern::MIDFOOT;
+                // pitchAtIc already carries the mounting sign (integrated with
+                // kPitchSign), so classify on it directly — no second flip.
+                if (pitchAtIc > kStrikeThreshDeg)       m.strike = StrikePattern::REARFOOT;
+                else if (pitchAtIc < -kStrikeThreshDeg) m.strike = StrikePattern::FOREFOOT;
+                else                                      m.strike = StrikePattern::MIDFOOT;
                 m.brakingIndex       = brakeAccum;     // in g; proxy for overstride
                 m.footRecoveryProxy = swingPeakRate;  // deg/s
                 m.valid = true;
                 newMetrics = true;
 
                 resetStrideWindow(ts);
+                // Re-open the braking-capture window for THIS stance AFTER
+                // reading the completed stride's peak, so it isn't zeroed
+                // before it is used.
+                braking = true;
+                brakeAccum = 0;
+                brakeWindowEnd = ts + static_cast<uint32_t>(kBrakeWindowMs);
                 prevIcTs = icTs;
                 return true;
             }
         }
+        // No completed stride: open the braking window for this stance and
+        // advance the IC reference for the next stride.
+        braking = true;
+        brakeAccum = 0;
+        brakeWindowEnd = ts + static_cast<uint32_t>(kBrakeWindowMs);
         prevIcTs = icTs;       // becomes the "previous IC" for the next stride
         haveIc = true;
         swingPeakRate = 0;

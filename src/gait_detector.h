@@ -56,12 +56,22 @@ private:
     // --- calibration -----------------------------------------------------
     static constexpr size_t kCalSamples = 64;   // ~40ms at 1.66kHz
     size_t calCount = 0;
-    float calGx = 0, calGy = 0, calGz = 0;  // gyro accumulation (variance)
+    float calGx = 0, calGy = 0, calGz = 0;  // gyro accumulation
     float calGx2 = 0, calGy2 = 0, calGz2 = 0;
     float calAx = 0, calAy = 0, calAz = 0;  // accel accumulation (gravity)
     bool calibrated = false;
-    int pitchAxis = 1;                          // 0=x,1=y,2=z (chosen at cal)
+    int pitchAxis = 1;                          // 0=x,1=y,2=z (chosen in motion)
     float gWorldUp[3] = {0, 0, 1};          // +up direction in sensor frame
+
+    // MOUNTING-AGNOSTIC pitch axis: chosen from the gyro axis with the largest
+    // variance over the FIRST kAxisSamples of MOTION (post-calibration), not
+    // during the stillness window — so it tracks the true sagittal axis, not
+    // sensor noise.
+    static constexpr size_t kAxisSamples = 32;  // ~19ms @1.66kHz of running
+    float axisG[3] = {0, 0, 0};
+    float axisG2[3] = {0, 0, 0};
+    size_t axisN = 0;
+    bool axisChosen = false;
 
     void calibrate(const ImuSample& s);
 
@@ -89,9 +99,7 @@ private:
         float y1 = 0, y2 = 0;   // output history
         float process(float x);
     };
-    Biquad lpPitch;     // pitch-rate low-pass
-    Biquad lpAccel;     // vertical accel low-pass
-    Biquad lpForeAft;   // fore-aft accel low-pass (braking)
+    Biquad lpPitch;     // pitch-rate low-pass (also smoothes the strike angle)
     void configureFilters(float sampleHz);
 
     // --- gait phase state machine -----------------------------------------
@@ -103,7 +111,6 @@ private:
     Phase phase = Phase::UNKNOWN;
 
     uint32_t lastMinTs = 0;     // timestamp of the most recent pitch min
-    float lastMinVal = 0;        // pitch value at that min (for classification)
     bool haveMin = false;
     uint32_t icTs = 0;           // most recent foot-strike
     uint32_t tcTs = 0;           // most recent toe-off
@@ -123,7 +130,6 @@ private:
     float veloZ = 0;             // integrated vertical velocity, m/s
     float posZ = 0;               // integrated height, m
     float posZmin = 0, posZmax = 0;
-    uint32_t strideStartTs = 0;    // for per-stride detrend window
     bool strideActive = false;
 
     // Fore-aft braking accumulator during early stance.
@@ -143,7 +149,6 @@ private:
     bool handlePitchMin(uint32_t ts, float pitchRate, float pitchNow,
                         float hMag);
 
-    void finalizeStride();   // fill GaitMetrics from the captured events
     void resetStrideWindow(uint32_t ts);
 
     float gToMs2(float g) const { return g * 9.80665f; }
