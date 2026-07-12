@@ -5,6 +5,7 @@
 #include "elapsed_timer.h"
 #include "state_machine.h"
 #include "test_ble.h"   // BLE-link test prototypes (defined in test/test_ble.cpp)
+#include "step_log.h"
 
 // ---------------------------------------------------------------------------
 // NanoWear host test suite.
@@ -26,7 +27,8 @@
 //   * elapsed_timer — non-blocking interval boundary
 //   * pedometer     — total/delta accumulation (MockIMU), I2C-failure handling,
 //                     + simulated e2e loop
-//   * state_machine — BOOT→LOGGING→SYNC / LOW_BATTERY transitions
+//   * step_log      — bounded in-RAM ring buffer (record/get/count/clear, wrap)
+//   * state_machine — BOOT→LOGGING→SYNC / LOW_BATTERY / DEBUG transitions
 // ---------------------------------------------------------------------------
 
 static MockIMU mock;
@@ -148,6 +150,51 @@ void test_pedometer_e2e_loop_simulation(void) {
     TEST_ASSERT_EQUAL_UINT16(131, pedo.getTotal());
 }
 
+// --- step_log ---------------------------------------------------------------
+// Uses a tiny local capacity for the wrap test; the default STEP_LOG_CAPACITY
+// is exercised via a normal record/get sequence.
+void test_step_log_empty(void) {
+    StepLog<STEP_LOG_CAPACITY> sl;
+    TEST_ASSERT_EQUAL_UINT(0, sl.count());
+}
+void test_step_log_record_and_get(void) {
+    StepLog<STEP_LOG_CAPACITY> sl;
+    sl.record(1000, 0);
+    sl.record(3000, 25);
+    TEST_ASSERT_EQUAL_UINT(2, sl.count());
+    TEST_ASSERT_EQUAL_UINT32(1000, sl.get(0).tMillis);
+    TEST_ASSERT_EQUAL_UINT16(0,    sl.get(0).total);
+    TEST_ASSERT_EQUAL_UINT32(3000, sl.get(1).tMillis);
+    TEST_ASSERT_EQUAL_UINT16(25,   sl.get(1).total);
+}
+void test_step_log_count_caps_at_capacity(void) {
+    StepLog<3> sl;
+    for (int i = 0; i < 10; i++) sl.record(i * 100, (uint16_t)i);
+    TEST_ASSERT_EQUAL_UINT(3, sl.count()); // never exceeds capacity
+}
+void test_step_log_ring_wraps_and_drops_oldest(void) {
+    StepLog<3> sl;
+    sl.record(100, 10);
+    sl.record(200, 20);
+    sl.record(300, 30);
+    // Full now; next record overwrites index 0 (oldest).
+    sl.record(400, 40);
+    TEST_ASSERT_EQUAL_UINT(3, sl.count());
+    // Oldest (100,10) should be gone; newest 3 are 200,300,400.
+    TEST_ASSERT_EQUAL_UINT32(200, sl.get(0).tMillis);
+    TEST_ASSERT_EQUAL_UINT16(20,   sl.get(0).total);
+    TEST_ASSERT_EQUAL_UINT32(300, sl.get(1).tMillis);
+    TEST_ASSERT_EQUAL_UINT32(400, sl.get(2).tMillis);
+    TEST_ASSERT_EQUAL_UINT16(40,   sl.get(2).total);
+}
+void test_step_log_clear(void) {
+    StepLog<STEP_LOG_CAPACITY> sl;
+    sl.record(1, 1);
+    sl.record(2, 2);
+    sl.clear();
+    TEST_ASSERT_EQUAL_UINT(0, sl.count());
+}
+
 // --- state_machine ----------------------------------------------------------
 void test_sm_starts_in_boot(void) {
     TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::BOOT, (uint8_t)sm.state());
@@ -186,6 +233,26 @@ void test_sm_low_battery_and_recover(void) {
     TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::LOGGING, (uint8_t)sm.state());
     TEST_ASSERT_TRUE(sm.shouldPoll(2010));
 }
+void test_sm_enter_debug_pauses_polling(void) {
+    sm.startLogging(0);
+    sm.enterDebug();
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::DEBUG, (uint8_t)sm.state());
+    // shouldPoll gates on LOGGING, so DEBUG halts polling automatically.
+    TEST_ASSERT_FALSE(sm.shouldPoll(99999));
+}
+void test_sm_resume_logging_rearms(void) {
+    sm.startLogging(0);
+    sm.enterDebug();
+    sm.resumeLogging(0); // back to LOGGING, timer re-armed from t=0
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::LOGGING, (uint8_t)sm.state());
+    TEST_ASSERT_FALSE(sm.shouldPoll(0));
+    TEST_ASSERT_TRUE(sm.shouldPoll(2000));
+}
+void test_sm_debug_only_from_logging(void) {
+    // enterDebug is a no-op unless currently LOGGING.
+    sm.enterDebug();
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)TrackerState::BOOT, (uint8_t)sm.state());
+}
 
 // --- explicit runner (auto-runner not generated in this env) ----------------
 int main(void) {
@@ -208,12 +275,16 @@ int main(void) {
     RUN_TEST(test_pedometer_delta_clamped_backwards);
     RUN_TEST(test_pedometer_no_loss_on_read_failure);
     RUN_TEST(test_pedometer_e2e_loop_simulation);
+    RUN_TEST(test_step_log_empty);
+    RUN_TEST(test_step_log_record_and_get);
+    RUN_TEST(test_step_log_count_caps_at_capacity);
+    RUN_TEST(test_step_log_ring_wraps_and_drops_oldest);
+    RUN_TEST(test_step_log_clear);
     RUN_TEST(test_sm_starts_in_boot);
     RUN_TEST(test_sm_boot_enters_logging);
     RUN_TEST(test_sm_poll_rearm);
     RUN_TEST(test_sm_sync_cycle);
     RUN_TEST(test_sm_low_battery_and_recover);
-
     // --- BLE link (rsc_codec + MockBlePeripheral) ---------------------------
     RUN_TEST(test_rsc_flags_minimal);
     RUN_TEST(test_rsc_flags_combo);
@@ -231,5 +302,10 @@ int main(void) {
     RUN_TEST(test_derive_cadence_zero_interval);
     RUN_TEST(test_derive_cadence_basic);
     RUN_TEST(test_derive_cadence_zero_delta);
+
+    // --- DEBUG state-machine transitions ------------------------------------
+    RUN_TEST(test_sm_enter_debug_pauses_polling);
+    RUN_TEST(test_sm_resume_logging_rearms);
+    RUN_TEST(test_sm_debug_only_from_logging);
     return UNITY_END();
 }
