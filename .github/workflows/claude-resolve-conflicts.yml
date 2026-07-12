@@ -16,8 +16,10 @@ name: Claude Auto-Resolve PR Conflicts
 #
 # Trigger scope is intentionally limited to `closed` (merged). Do NOT add
 # `synchronize`/`push`: pushing the resolved branch fires `synchronize`, which
-# would re-trigger this workflow and ping-pong.
+# would re-trigger this workflow and ping-pong. `workflow_dispatch` lets you
+# re-run manually (e.g. to re-test) and resolves all currently conflicting PRs.
 on:
+  workflow_dispatch:
   pull_request:
     types: [closed]
 
@@ -33,12 +35,13 @@ concurrency:
 
 jobs:
   resolve-conflicts:
-    # Only act when a PR was actually MERGED into the main branch.
+    # Run on a real merge into main, or on a manual workflow_dispatch.
     if: >-
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'main'
+      github.event_name == 'workflow_dispatch' ||
+      ( github.event.pull_request.merged == true &&
+        github.event.pull_request.base.ref == 'main' )
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -76,7 +79,7 @@ jobs:
           # Assemble the headless Claude invocation. ANTHROPIC_BASE_URL and
           # ANTHROPIC_API_KEY are already in the step env; add --model only when
           # a non-default model (e.g. an OpenRouter slug) is configured.
-          CLAUDE_ARGS=(--dangerously-skip-permissions --max-turns 12)
+          CLAUDE_ARGS=(--dangerously-skip-permissions --max-turns 40)
           if [ -n "${CLAUDE_MODEL:-}" ]; then
             CLAUDE_ARGS+=(--model "$CLAUDE_MODEL")
           fi
@@ -85,11 +88,13 @@ jobs:
           git config --global user.email "claude-code-bot@users.noreply.github.com"
 
           # Prompt given to Claude for each conflicting PR. Keep it explicit:
-          # a merge is ALREADY in progress, preserve BOTH sides' intent, stage
-          # each fixed file, and never commit/push/run builds themselves.
-          RESOLVE_PROMPT='A `git merge origin/main` is already in progress and has left conflict markers (<<<<<<<, =======, >>>>>>>) in the working tree. Resolve EVERY file that contains markers by preserving the logical intent of BOTH sides: keep all meaningful changes, reconcile overlapping edits sensibly, and never silently drop either branch'"'"'s work. Do NOT run `git merge` again (a merge is already in progress), do NOT run build/test toolchains (they are unavailable in this environment), do NOT commit, and do NOT push. After fixing a file, stage it with `git add`. When no files remain in an unmerged state, stop. If a conflict is genuinely ambiguous or unsafe to resolve, leave it marked and stop.'
+          # a merge is ALREADY in progress, preserve BOTH sides' intent by
+          # EDITING the marked files (the harness stages/commits them), and
+          # never run git merge / builds / commit / push itself.
+          RESOLVE_PROMPT='A `git merge origin/main` is already in progress and has left conflict markers (<<<<<<<, =======, >>>>>>>) in the working tree. Edit EVERY file that contains markers to resolve the conflict, preserving the logical intent of BOTH sides: keep all meaningful changes, reconcile overlapping edits sensibly, and never silently drop either branch'"'"'s work. Do NOT run `git merge` (a merge is already in progress), do NOT run build/test toolchains, do NOT commit, and do NOT push. The harness stages and commits your edits. When no files contain conflict markers, stop. If a conflict is genuinely ambiguous or unsafe, leave it marked and stop.'
 
-          MERGED_PR="${{ github.event.pull_request.number }}"
+          MERGED_PR="${{ github.event.pull_request.number || 'manual' }}"
+          FAILURES=0
 
           # Collect open PRs targeting main. Fail loud if the API call errors
           # (a silent empty list would make the job exit green doing nothing).
@@ -141,13 +146,21 @@ jobs:
             # `main` is the second line of defense — see PR description.)
             rm -rf .claude CLAUDE.md
 
+            # Let Claude fail (e.g. hit max turns) without aborting the step;
+            # an unfinished resolution is detected and reported just below.
             claude -p "$RESOLVE_PROMPT" \
-              "${CLAUDE_ARGS[@]}"
+              "${CLAUDE_ARGS[@]}" || true
+
+            # Stage whatever conflicted files were edited. Only previously
+            # unmerged paths are touched, so stripped project config is never
+            # re-added, and a model that forgot `git add` is covered.
+            git diff --name-only --diff-filter=U | xargs -r git add
 
             # Any file still in an unmerged state => Claude could not finish.
             UNMERGED="$(git diff --name-only --diff-filter=U)"
             if [ -n "$UNMERGED" ]; then
               echo "::error::Claude could not fully resolve conflicts in: $UNMERGED"
+              FAILURES=$((FAILURES+1))
               git merge --abort || true
               gh pr comment "$PR_NUM" \
                 --body "⚠️ Automated conflict resolution failed after the merge of #$MERGED_PR (Claude could not safely resolve: $UNMERGED). Please resolve the conflicts manually." || true
@@ -158,6 +171,7 @@ jobs:
                  || git diff --cached --quiet \
                  || [ -n "$(git diff --cached -G '<<<<<<<' --name-only)" ]; then
                 echo "::error::Merge not completed or leftover conflict markers; not pushing."
+                FAILURES=$((FAILURES+1))
                 git merge --abort || true
                 gh pr comment "$PR_NUM" \
                   --body "⚠️ Automated conflict resolution did not complete cleanly after the merge of #$MERGED_PR. Please resolve the conflicts manually." || true
@@ -169,6 +183,7 @@ jobs:
                     --body "✅ Merge conflicts with \`main\` were automatically resolved by Claude Code after the merge of #$MERGED_PR. Please re-review." || true
                 else
                   echo "::error::Push to $PR_BRANCH failed (branch protection?)."
+                  FAILURES=$((FAILURES+1))
                   git merge --abort || true
                 fi
               fi
@@ -176,3 +191,10 @@ jobs:
 
             echo "::endgroup::"
           done
+
+          # Surface an overall failure so the run goes red when any PR could
+          # not be auto-resolved (details are on each PR's comment).
+          if [ "$FAILURES" -gt 0 ]; then
+            echo "::error::$FAILURES PR(s) could not be auto-resolved — see the comments on those PRs."
+            exit 1
+          fi
