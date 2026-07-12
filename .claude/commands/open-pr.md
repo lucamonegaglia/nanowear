@@ -12,11 +12,11 @@ Optional args ($ARGUMENTS): extra flags/title for `gh pr create`, e.g.
 1. **Guardrails.**
    - Confirm you are NOT on `main`. If you are, stop and tell the user to switch
      to a feature branch first.
-   - **Sync `main` first.** Run `git fetch && git merge origin/main` (or rebase)
-     before reviewing or opening. The branch diff and the `/code-review` in step
-     2 are measured against `main` — a stale `main` makes the review miss conflicts
-     and lets an out-of-date PR slip through. Never open a PR against a `main`
-     that isn't current.
+   - **Sync your branch with `main` first.** Run `git fetch && git merge origin/main` (or rebase)
+     before reviewing or opening, so your branch is based on the current `main`. The
+     branch diff and the `/code-review` in step 2 are measured against `main` — a
+     stale `main` makes the review miss conflicts and lets an out-of-date PR slip
+     through. Never open a PR against a `main` that isn't current.
    - **Commit** your work so the diff is complete and the reviewed scope equals
      the scope that gets opened.
 

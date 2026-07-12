@@ -98,14 +98,13 @@ refactor(imu): extract IMUSensor interface from main.cpp
   - Follow the PR template (`.github/pull_request_template.md`).
   - Explain *what* changed, *why*, and *how it was verified*.
   - **Always update `main` before opening a PR:** run `git fetch && git merge origin/main`
-    (or rebase) so your branch is based on the current `main`. Never open a PR
-    against a stale `main`. Then be free of merge conflicts — rebase/merge onto
-    the latest `main` and resolve any conflict before opening the PR or requesting
-    review.
+    (or rebase) so your branch is based on the current `main`, and resolve any
+    conflict that results. Never open a PR against a stale `main`.
 - Require at least one review. Use `/code-review` to self-review the diff
   before requesting a human review.
 - Example end-to-end flow:
   ```bash
+  git fetch && git merge origin/main   # sync with current main first
   git commit -m "test(native): add MockIMU run-loop simulation"
   git push -u origin feature/pedometer-unit-tests
   gh pr create --draft --fill
