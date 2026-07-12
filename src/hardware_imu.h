@@ -30,6 +30,10 @@ public:
     // over BLE. Mirrors step 3 of initHardwarePedometer.
     void resetPedometerSteps();
 
+    // Zero the embedded pedometer's step counter (IMUSensor interface), leaving
+    // the algorithm enabled. Returns true on success; used by the debug console.
+    bool resetStepCount() override;
+
 private:
     // Write a single byte to an IMU register over I2C. Returns true on ACK.
     bool writeRegister(uint8_t reg, uint8_t value);

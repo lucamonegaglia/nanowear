@@ -5,6 +5,8 @@
 #include "state_machine.h"
 #include "ble_peripheral.h"
 #include "ble_peripheral_arduino.h"  // board-only concrete BLE driver
+#include "step_log.h"
+#include "debug_console.h"
 
 // ---------------------------------------------------------------------------
 // NanoWear firmware — screenless ankle-worn fitness tracker
@@ -15,6 +17,10 @@
 //   * Testable: step logic lives in Pedometer (pure) behind the IMU interface;
 //     the board-only HardwareIMU is the only part that touches I2C. The
 //     StateMachine is also pure, so the orchestration is host-testable.
+//   * In-RAM step log: every successful poll appends {tMillis, total} to a
+//     bounded ring buffer (StepLog) — the board has no filesystem in its
+//     toolchain, so this is the "saved logs". A USB-Serial debug console
+//     (DebugConsole) can dump/extract it in a paused DEBUG state, no Bluetooth.
 //   * Current scope (just the board, USB-powered): BOOT -> LOGGING. SYNC and
 //     LOW_BATTERY are wired but entered only by future BLE / power code.
 // ---------------------------------------------------------------------------
@@ -33,6 +39,9 @@ void handleStepReset() {
     pedometer.reset();
     Serial.println("[BLE] Step reset requested by phone");
 }
+
+static StepLog<STEP_LOG_CAPACITY> stepLog;        // bounded in-RAM step history
+static DebugConsole debug(stepLog, pedometer, tracker, imu); // USB-Serial debug channel
 
 // Throttle for the "not logging" diagnostic so it doesn't flood Serial.
 static unsigned long lastStateDiagMs = 0;
@@ -88,6 +97,11 @@ void loop() {
     // once a phone is connected. (Green could be used for "connected" instead.)
     digitalWrite(LEDB, ble.isConnected() ? HIGH : LOW);
 
+    // Debug command channel (USB Serial). Non-blocking: reads any pending byte
+    // and acts on single-character commands (r/d/g/l/c/s/?) without disrupting
+    // logging. Handles the user's "extract logs without Bluetooth" dev path.
+    debug.pollSerial();
+
     // Power-optimised, non-blocking poll: act only when LOGGING and the 2s
     // window has elapsed.
     if (tracker.shouldPoll(now)) {
@@ -104,6 +118,12 @@ void loop() {
 
         uint16_t delta = pedometer.update();
         uint16_t total = pedometer.getTotal();
+
+        // Persist this reading to the in-RAM log only on a good read, so a
+        // failed I2C read never injects a duplicate/stale timestamp.
+        if (pedometer.readOk()) {
+            stepLog.record(now, total);
+        }
 
         Serial.print("[PEDOMETER] Total steps: ");
         Serial.println(total);

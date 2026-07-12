@@ -91,3 +91,14 @@ bool HardwareIMU::readStepCount(uint16_t& out) {
     out = combineStepBytes(lowByte, highByte);
     return true;
 }
+
+// Zero the embedded pedometer's step counter (PEDO_RST_STEP bit in PEDO_CMD_REG).
+// This only clears the count — the pedometer algorithm (PEDO_EN) stays enabled,
+// unlike initHardwarePedometer() which also configures and routes the interrupt.
+bool HardwareIMU::resetStepCount() {
+    bool ok = true;
+    ok &= openFuncBank();
+    ok &= writeRegister(PEDO_CMD_REG, 0x04); // PEDO_RST_STEP: reset count to 0
+    ok &= closeFuncBank();
+    return ok;
+}
