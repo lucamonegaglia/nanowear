@@ -102,10 +102,17 @@ public:
 // Walks `buf` (exactly `len` raw FIFO bytes) in `pattern.bytesPerSample()`
 // strides, decodes each little-endian int16 axis, scales it to physical
 // units via `aScale` (g per LSB) and `gScale` (deg/s per LSB), and writes
-// `ImuSample`s into `out` (up to `maxOut`). `tsBase` is the timestamp of
-// the FIRST sample; each subsequent sample is stamped `tsBase + i*dtMs` so the
-// caller only needs the ODR (not the sensor's own timestamp) to reconstruct
-// timing. `tsBase` is left pointing just past the last sample for chaining.
+// `ImuSample`s into `out` (up to `maxOut`). `tsBase` is the (fractional-ms)
+// timestamp of the FIRST sample; each subsequent sample is stamped
+// `tsBase + i*dtMs` so the caller only needs the ODR (not the sensor's own
+// timestamp) to reconstruct timing. `tsBase` is left pointing just past the
+// last sample for chaining across bursts.
+//
+// dtMs and tsBase are FLOAT milliseconds on purpose: at 1.66 kHz the period is
+// ~0.602 ms/sample, which a uint32 dt would truncate to 0 — collapsing every
+// timestamp and starving the detector's plausibility gates. Accumulating time
+// as float and rounding only at the per-sample stamp keeps stride intervals
+// accurate to ~±1 ms even though each increment is sub-millisecond.
 //
 // Returns the number of samples decoded. If `len` is not a whole number of
 // samples the trailing partial bytes are ignored (defensive; the FIFO reader
@@ -114,7 +121,7 @@ public:
 inline size_t decodeFifo(const uint8_t* buf, size_t len,
                          const FifoPattern& pattern,
                          float aScale, float gScale,
-                         uint32_t dtMs, uint32_t& tsBase,
+                         float dtMs, float& tsBase,
                          ImuSample* out, size_t maxOut) {
     const uint8_t bps = pattern.bytesPerSample();
     if (bps == 0 || bps > len) return 0;
@@ -144,10 +151,12 @@ inline size_t decodeFifo(const uint8_t* buf, size_t len,
         }
         // (timestamp flag reserved for future patterns; not consumed yet)
 
-        s.ts = tsBase + static_cast<uint32_t>(i) * dtMs;
+        // Round the CUMULATIVE time (not the increment) so sub-ms periods
+        // still advance the integer-ms stamp correctly.
+        s.ts = static_cast<uint32_t>(tsBase + static_cast<float>(i) * dtMs + 0.5f);
     }
 
-    tsBase += static_cast<uint32_t>(nSamples) * dtMs;
+    tsBase += static_cast<float>(nSamples) * dtMs;
     return nSamples;
 }
 

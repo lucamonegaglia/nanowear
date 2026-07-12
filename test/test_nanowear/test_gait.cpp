@@ -38,7 +38,7 @@ void test_decode_fifo_roundtrip(void) {
     // scale = 1 so raw LSB == physical unit (exact comparison).
     FifoPattern pat;   // default: accel + gyro, no timestamp
     ImuSample out[4];
-    uint32_t tsBase = 0;
+    float tsBase = 0;
     size_t n = decodeFifo(buf, sizeof(buf), pat, 1.f, 1.f, 1.f, tsBase, out, 4);
     TEST_ASSERT_EQUAL_UINT32(2u, (uint32_t)n);
 
@@ -54,7 +54,22 @@ void test_decode_fifo_roundtrip(void) {
     // timestamps assigned from tsBase + i*dtMs
     TEST_ASSERT_EQUAL_UINT32(0, out[0].ts);
     TEST_ASSERT_EQUAL_UINT32(1, out[1].ts);
-    TEST_ASSERT_EQUAL_UINT32(2, tsBase);   // advanced past both samples
+    TEST_ASSERT_EQUAL_UINT32(2, (uint32_t)tsBase);   // advanced past both samples
+
+    // Fractional ODR period (the real 1.66 kHz case ~0.602 ms/sample) must NOT
+    // collapse timestamps to 0: the float clock advances cumulatively and the
+    // stamp rounds. Over many samples ts must strictly climb, and tsBase chains
+    // across bursts. This is the case a uint32 dt would have truncated to 0.
+    float fb = 0.f;
+    ImuSample many[64];
+    uint8_t big[64 * 12];
+    for (size_t i = 0; i < sizeof(big); i++) big[i] = 0;      // zeros decode fine
+    size_t m0 = decodeFifo(big, sizeof(big), pat, 1.f, 1.f, 0.602f, fb, many, 64);
+    TEST_ASSERT_EQUAL_UINT32(64u, (uint32_t)m0);
+    TEST_ASSERT_EQUAL_UINT32(0, many[0].ts);
+    TEST_ASSERT_TRUE(many[63].ts > 0);                        // did NOT collapse
+    TEST_ASSERT_FLOAT_WITHIN(1.5f, 38.0f, many[63].ts);      // 63 * 0.602 ~= 37.9
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 38.528f, fb);            // 64 * 0.602 chained
 }
 
 // --- GaitDetector: synthetic running signal -> measured metrics ---------
