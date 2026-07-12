@@ -62,7 +62,7 @@ jobs:
           # OPENROUTER_API_KEY if ANTHROPIC_API_KEY is unset.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.OPENROUTER_API_KEY }}
           # For OpenRouter / other proxies: the Anthropic-compatible base URL
-          # (OpenRouter uses https://openrouter.ai/api — NO /v1, the CLI adds it)
+          # (OpenRouter uses https://openrouter.ai/api — NO /v1, the CLI appends it)
           # and the model slug, e.g. tencent/hy3:free. Leave blank for Anthropic.
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
           CLAUDE_MODEL: ${{ secrets.CLAUDE_MODEL }}
@@ -87,11 +87,11 @@ jobs:
           git config --global user.name "claude-code-bot[bot]"
           git config --global user.email "claude-code-bot@users.noreply.github.com"
 
-          # Prompt given to Claude for each conflicting PR. Keep it explicit:
-          # a merge is ALREADY in progress, preserve BOTH sides' intent by
-          # EDITING the marked files (the harness stages/commits them), and
-          # never run git merge / builds / commit / push itself.
-          RESOLVE_PROMPT='A `git merge origin/main` is already in progress and has left conflict markers (<<<<<<<, =======, >>>>>>>) in the working tree. Edit EVERY file that contains markers to resolve the conflict, preserving the logical intent of BOTH sides: keep all meaningful changes, reconcile overlapping edits sensibly, and never silently drop either branch'"'"'s work. Do NOT run `git merge` (a merge is already in progress), do NOT run build/test toolchains, do NOT commit, and do NOT push. The harness stages and commits your edits. When no files contain conflict markers, stop. If a conflict is genuinely ambiguous or unsafe, leave it marked and stop.'
+          # Headless Claude resolves the conflicts by driving the Edit/Write
+          # tools natively — exactly as it would interactively. We hand it the
+          # list of conflicted files; it edits each to merge both sides and
+          # strips the markers. No text-extraction workaround: the model is
+          # fully capable of tool use, so we let it do the work.
 
           MERGED_PR="${{ github.event.pull_request.number || 'manual' }}"
           FAILURES=0
@@ -149,15 +149,49 @@ jobs:
             # `main` is the second line of defense — see PR description.)
             rm -rf .claude CLAUDE.md
 
-            # Let Claude fail (e.g. hit max turns) without aborting the step;
-            # an unfinished resolution is detected and reported just below.
-            claude -p "$RESOLVE_PROMPT" \
-              "${CLAUDE_ARGS[@]}" || true
+            # Find the conflicted files, then let ONE headless Claude run drive
+            # the Edit tool to resolve them all. The model is given the file
+            # list and clear instructions; it reads each file, merges both
+            # sides, and removes the markers — no text-return workaround.
+            CONFLICTED="$(git diff --name-only --diff-filter=U)"
+            if [ -z "$CONFLICTED" ]; then
+              echo "::warning::Merge reported conflicts but no unmerged paths found; aborting."
+              git merge --abort || true
+              echo "::endgroup::"
+              continue
+            fi
+            echo "Conflicted files:"; echo "$CONFLICTED"
 
-            # Stage whatever conflicted files were edited. Only previously
-            # unmerged paths are touched, so stripped project config is never
-            # re-added, and a model that forgot `git add` is covered.
-            git diff --name-only --diff-filter=U | xargs -r git add || true
+            PROMPTFILE="$(mktemp)"
+            {
+              echo "You are resolving git merge conflicts in this repository. A merge of origin/main into the current branch is in progress and has left conflict markers. Resolve EVERY file listed below by editing it to contain the correctly merged content — keep the intent of BOTH sides (HEAD and the incoming branch)."
+              echo
+              echo "For each file:"
+              echo "  1. Read the file and locate the conflict markers: <<<<<<< HEAD ... ======= ... >>>>>>> <branch>."
+              echo "  2. Replace the entire marked block with the merged result. Preserve all other (non-conflicted) lines exactly."
+              echo "  3. Ensure NO conflict markers remain in the file when you finish."
+              echo
+              echo "Do NOT run any git commands, do NOT commit, and do NOT push. When you are done, every file listed below must be free of conflict markers."
+              echo
+              echo "Conflicted files:"
+              echo "$CONFLICTED"
+            } > "$PROMPTFILE"
+
+            # Claude drives the tools itself. A non-zero exit is non-fatal: we
+            # verify the actual result (marker-free, staged) rather than trusting
+            # the exit code.
+            claude -p "$(cat "$PROMPTFILE")" "${CLAUDE_ARGS[@]}" || true
+            rm -f "$PROMPTFILE"
+
+            # Stage the previously-unmerged files (only those paths).
+            printf '%s\n' "$CONFLICTED" | xargs -r git add || true
+
+            # Diagnostics: show what changed, and surface any leftover markers.
+            git diff --cached --stat
+            if git diff --cached -G '<<<<<<<' --name-only | grep -q .; then
+              echo "::warning::Leftover conflict markers in staged files:"
+              git diff --cached -G '<<<<<<<' --name-only
+            fi
 
             # Any file still in an unmerged state => Claude could not finish.
             UNMERGED="$(git diff --name-only --diff-filter=U)"
