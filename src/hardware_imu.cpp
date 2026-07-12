@@ -51,6 +51,11 @@ bool HardwareIMU::initHardwarePedometer() {
     // 4. Leave the embedded-function bank to return to normal register ops.
     ok &= closeFuncBank();
 
+    // Read back PEDO_EN to confirm the enable write actually landed on the
+    // part (walk-free proof the embedded pedometer engine is on). Surfaced
+    // over serial so a missing enable is caught without a walk.
+    debugProbe();
+
     // 5. Route the pedometer step-detection interrupt natively to INT1.
     ok &= writeRegister(FUNC_CFG_ACCESS, ADV_INT_BANK);  // advanced interrupt page
     ok &= writeRegister(EMB_FUNC_INT1, 0x08);            // route INT1_STEP_DET detector
@@ -62,6 +67,17 @@ bool HardwareIMU::initHardwarePedometer() {
         Serial.println("Error: LSM6DSOX pedometer configuration failed.");
     }
     return ok;
+}
+
+void HardwareIMU::debugProbe() {
+    // Read back the pedometer-enable register (EMB_FUNC_EN_A) in the
+    // embedded-functions page and confirm the PEDO_EN bit (0x08) is set.
+    openFuncBank();
+    uint8_t en = readRegister(EMB_FUNC_EN_A);
+    closeFuncBank();
+    pedoEnabled_ = (en & 0x08) != 0;
+    Serial.print("[PEDOMETER] PEDO_EN: ");
+    Serial.println(pedoEnabled_ ? "ON" : "OFF");
 }
 
 bool HardwareIMU::begin() {

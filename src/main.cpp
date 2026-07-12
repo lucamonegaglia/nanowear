@@ -250,6 +250,11 @@ void loop() {
         uint16_t total = pedometer.getTotal();
 
 #if defined(COM_MODE_DEBUG)
+        // Walk-free verification: confirm the pedometer engine is actually
+        // enabled on the part (proves the register fix without the board
+        // strapped to an ankle).
+        Serial.print("[PEDOMETER] PEDO_EN: ");
+        Serial.println(imu.pedometerEnabled() ? "ON" : "OFF");
         // Persist this reading to the in-RAM ring buffer only on a good read, so
         // a failed I2C read never injects a duplicate/stale timestamp.
         if (pedometer.readOk()) {

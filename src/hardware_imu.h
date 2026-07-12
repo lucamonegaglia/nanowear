@@ -43,6 +43,14 @@ public:
     // the algorithm enabled. Returns true on success; used by the debug console.
     bool resetStepCount() override;
 
+    // True if the LSM6DSOX PEDO_EN bit was observed set after init (walk-free
+    // proof the embedded pedometer engine is actually enabled on the part).
+    bool pedometerEnabled() const { return pedoEnabled_; }
+
+    // Temporary diagnostic: probe candidate FUNC_CFG_ACCESS pages/registers to
+    // discover the real LSM6DSOX pedometer mapping (web docs unavailable here).
+    void debugProbe();
+
     // --- FifoSource (raw burst reader) -----------------------------------
     // Drain the LSM6DSOX FIFO into `out` (up to `cap` bytes). Returns
     // true on a successful drain; `filled` is the byte count (0 if empty).
@@ -80,7 +88,7 @@ private:
 
     // Embedded Functions register map
     static constexpr uint8_t FUNC_CFG_ACCESS      = 0x01;
-    static constexpr uint8_t EMB_FUNC_EN_A        = 0x03; // PEDO_EN bit (0x08) lives here
+    static constexpr uint8_t EMB_FUNC_EN_A        = 0x04; // PEDO_EN bit (0x08) lives here (probe-confirmed)
     static constexpr uint8_t PEDO_CMD_REG         = 0x0F; // PEDO_RST_STEP bit (0x04) lives here
     static constexpr uint8_t INT1_CTRL            = 0x0D;
     static constexpr uint8_t EMB_FUNC_INT1        = 0x0A;
@@ -108,6 +116,7 @@ private:
     float gScale_ = 0.070f;       // ±2000 dps -> 70 mdps/LSB = 0.070 dps/LSB
     float dtMs_   = 1000.f / 1660.f;  // sample period at 1.66 kHz
     FifoPattern fifoPattern_;          // accel + gyro, no timestamp (12 B/sample)
+    bool pedoEnabled_ = false;         // PEDO_EN observed after init
 };
 
 #endif // NANOWEAR_HARDWARE_IMU_H
