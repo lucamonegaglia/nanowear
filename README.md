@@ -32,11 +32,15 @@ only board is a shared device with no default CI runner).
 ```
 [STATE] BOOT complete -> LOGGING
 [PEDOMETER] Total steps: 42
-[PEDOMETER] New steps this poll: 3
+[PEDOMETER] New steps this poll: 3   # printed only when delta > 0
 ```
 
 When not logging (e.g. a sensor-init failure keeps the unit in `BOOT`), it
-emits a periodic diagnostic instead of silently dropping steps.
+emits a periodic diagnostic every 5 s instead of silently dropping steps:
+
+```
+[STATE] Not logging (1); steps are not being recorded.
+```
 
 ---
 
