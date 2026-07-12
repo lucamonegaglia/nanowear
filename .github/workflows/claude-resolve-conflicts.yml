@@ -102,7 +102,10 @@ jobs:
             --json number,headRefName,isCrossRepository)" \
             || { echo "::error::gh pr list failed"; exit 1; }
 
-          echo "$PR_JSON" | jq -c '.[]' | while read -r pr; do
+          # NOTE: the loop is fed via process substitution (not a pipe) so it
+          # runs in the parent shell — a pipe would put it in a subshell and
+          # discard the FAILURES counter below.
+          while IFS= read -r pr; do
             PR_NUM="$(echo "$pr" | jq -r '.number')"
             PR_BRANCH="$(echo "$pr" | jq -r '.headRefName')"
             IS_XREPO="$(echo "$pr" | jq -r '.isCrossRepository')"
@@ -154,7 +157,7 @@ jobs:
             # Stage whatever conflicted files were edited. Only previously
             # unmerged paths are touched, so stripped project config is never
             # re-added, and a model that forgot `git add` is covered.
-            git diff --name-only --diff-filter=U | xargs -r git add
+            git diff --name-only --diff-filter=U | xargs -r git add || true
 
             # Any file still in an unmerged state => Claude could not finish.
             UNMERGED="$(git diff --name-only --diff-filter=U)"
@@ -190,7 +193,7 @@ jobs:
             fi
 
             echo "::endgroup::"
-          done
+          done < <(printf '%s\n' "$PR_JSON" | jq -c '.[]')
 
           # Surface an overall failure so the run goes red when any PR could
           # not be auto-resolved (details are on each PR's comment).
