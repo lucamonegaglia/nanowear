@@ -1,21 +1,45 @@
 #include <Arduino.h>
-#include <WiFiNINA.h>            // onboard RGB LED (LEDR/LEDG/LEDB); active-low
 #include "hardware_imu.h"
 #include "pedometer.h"
 #include "state_machine.h"
 #include "step_source.h"
-#include "ble_peripheral.h"
-#include "ble_peripheral_arduino.h"  // board-only concrete BLE driver
-#include "step_log.h"
-#include "debug_console.h"
+
+// Communication mode is chosen at build time via the COM_MODE macro (see
+// platformio.ini). Exactly one of COM_MODE_BLE / COM_MODE_DEBUG is defined; the
+// unused path is not compiled, so the two modes are mutually exclusive — the
+// BLE radio is absent from the DEBUG build and the ring-buffer dump is not
+// *activated* in the BLE build. Switch modes by flashing the other env (no NINA
+// firmware reflash needed, only the sketch changes).
+//
+// Running dynamics (NANOWEAR_RUNNING_DYNAMICS) is a BLE-only sub-feature: it
+// splits the firmware across both RP2040 cores with BLE on Core0, so it is only
+// valid together with COM_MODE_BLE. In DEBUG mode (no BLE) the dual-core path is
+// compiled out and the ring buffer lives on the single core instead.
+#if defined(COM_MODE_BLE)
+  #include <WiFiNINA.h>            // RGB LED (LEDR/LEDG/LEDB); active-low
+  #include "ble_peripheral.h"
+  #include "ble_peripheral_arduino.h"  // board-only concrete BLE driver
+  // Running dynamics keeps the in-RAM step log + USB-Serial dump on Core1, so
+  // it needs these headers even in the BLE comm mode.
+  #if defined(NANOWEAR_RUNNING_DYNAMICS)
+    #include "step_log.h"
+    #include "debug_console.h"
+  #endif
+#elif defined(COM_MODE_DEBUG)
+  #include "step_log.h"
+  #include "debug_console.h"
+#else
+  #error "COM_MODE must be defined: build with -D COM_MODE_BLE or -D COM_MODE_DEBUG (see platformio.ini)"
+#endif
 
 // Running dynamics (contact time, strike pattern, oscillation, braking/overstride
-// proxy, foot-recovery) is OPT-IN behind NANOWEAR_RUNNING_DYNAMICS. It is OFF by
-// default so the shipped firmware is the validated single-core step-counter +
-// debug step-log path (PR #14). When enabled, the firmware splits across both
-// RP2040 cores (Core1 owns I2C + FIFO + gait detector; Core0 owns BLE + phone
-// link) and additionally streams the raw FIFO to the GaitDetector. See below.
-#ifdef NANOWEAR_RUNNING_DYNAMICS
+// proxy, foot-recovery) is OPT-IN behind NANOWEAR_RUNNING_DYNAMICS and only valid
+// with the BLE comm mode. It is OFF by default so the shipped firmware is the
+// validated single-core step-counter + debug step-log path (PR #14). When enabled,
+// the firmware splits across both RP2040 cores (Core1 owns I2C + FIFO + gait
+// detector; Core0 owns BLE + phone link) and additionally streams the raw FIFO to
+// the GaitDetector. See below.
+#if defined(NANOWEAR_RUNNING_DYNAMICS) && defined(COM_MODE_BLE)
 #include <hardware/sync.h>          // RP2040 cross-core spinlock
 #include "gait_detector.h"          // pulls in imu_fifo.h (FifoSource/ImuSample)
 #endif
@@ -23,18 +47,22 @@
 // ---------------------------------------------------------------------------
 // NanoWear firmware — screenless ankle-worn fitness tracker
 // ---------------------------------------------------------------------------
+// Communication mode (compile-time, via COM_MODE):
+//   * BLE  : stream Running Speed & Cadence (RSC 0x1814) + raw steps to a phone
+//            over the NINA BLE radio (BlePeripheral). Default build.
+//   * DEBUG: append every successful poll to a bounded in-RAM ring buffer
+//            (StepLog) and dump/extract it over USB Serial via DebugConsole —
+//            no Bluetooth. The board has no filesystem in its toolchain, so this
+//            ring buffer is the "saved logs".
+//
 // DEFAULT (single-core, NANOWEAR_RUNNING_DYNAMICS undefined — PR #14 path):
 //   * One core (setup/loop). Non-blocking: loop() never calls delay(); polling
 //     is driven by the StateMachine + ElapsedTimer.
 //   * Testable: step logic lives in Pedometer (pure) behind the IMU interface;
 //     the board-only HardwareIMU is the only part that touches I2C. The
 //     StateMachine is also pure, so the orchestration is host-testable.
-//   * In-RAM step log: every successful poll appends {tMillis, total} to a
-//     bounded ring buffer (StepLog). A USB-Serial debug console (DebugConsole)
-//     can dump/extract it, no Bluetooth. This is the path the ~50-100 step
-//     on-device test exercises (scripts/dump_log.py + tests/e2e).
 //
-// OPT-IN DUAL-CORE (NANOWEAR_RUNNING_DYNAMICS defined):
+// OPT-IN DUAL-CORE (NANOWEAR_RUNNING_DYNAMICS + COM_MODE_BLE):
 //   * Core0 (setup/loop): BLE radio, status LED, phone link. It never touches
 //     I2C — it only reads the lock-guarded shared snapshot and pushes it to a
 //     connected phone, keeping BLE responsive (no I2C burst blocking the radio).
@@ -55,15 +83,24 @@ static HardwareStepSource stepSrc(imu);  // MLC pedometer (active)
 #endif
 static Pedometer pedometer(stepSrc);
 static StateMachine tracker(2000);     // poll the step source every 2s
-static ArduinoBlePeripheral ble;       // phone link (NINA BLE, RSC + custom)
 
-// Bounded in-RAM step history + USB-Serial debug channel (records/dumps the
-// ~50-100 step log). Owned by the I2C-owning core in each mode (Core0 single,
-// Core1 dual) so dump/reset never race the bus.
+#if defined(COM_MODE_BLE)
+static ArduinoBlePeripheral ble;       // phone link (NINA BLE, RSC + custom)
+// In BLE mode the debug dump is normally absent (mutual exclusivity). It is
+// compiled in only when running dynamics is enabled, because Core1 owns the
+// ring buffer + USB-Serial channel there.
+#if defined(NANOWEAR_RUNNING_DYNAMICS)
 static StepLog<STEP_LOG_CAPACITY> stepLog;
 static DebugConsole debug(stepLog, pedometer, tracker, imu);
+#endif
+#elif defined(COM_MODE_DEBUG)
+// Bounded in-RAM step history + USB-Serial debug channel (records/dumps the
+// ~50-100 step log). Owned by the single core in DEBUG mode.
+static StepLog<STEP_LOG_CAPACITY> stepLog;
+static DebugConsole debug(stepLog, pedometer, tracker, imu);
+#endif
 
-#ifdef NANOWEAR_RUNNING_DYNAMICS
+#if defined(NANOWEAR_RUNNING_DYNAMICS) && defined(COM_MODE_BLE)
 // --- Core1-only objects (I2C + detection) -------------------------------
 static GaitDetector detector(1660.f);  // 1.66 kHz FIFO ODR
 static ElapsedTimer fifoTimer(15);      // Core1 FIFO-drain cadence
@@ -88,6 +125,7 @@ void handleStepReset() {
 }
 #else
 // Reset handler invoked by the phone over BLE (single core owns I2C directly).
+// Also compiled for DEBUG mode (no phone link, so it never fires there).
 void handleStepReset() {
     imu.resetStepCount();
     pedometer.reset();
@@ -123,6 +161,10 @@ void setup() {
     tracker.startLogging(millis());
     Serial.println("[STATE] BOOT complete -> LOGGING");
 
+    // Communication mode banner — lets the on-device e2e harness (run_e2e.py)
+    // select the right per-feature tests without knowing which env was flashed.
+#if defined(COM_MODE_BLE)
+    Serial.println("[MODE] BLE");
     // Report the NINA module firmware version. BLE over the NINA-W102 requires
     // firmware >= 3.0.1 (see docs/BLE_SETUP.md); older versions make BLE.begin()
     // fail and must be flashed via the Arduino IDE / esptool before the radio
@@ -141,11 +183,15 @@ void setup() {
         digitalWrite(LEDB, LOW); // blue ON = advertising
         Serial.println("[BLE] Advertising as 'NanoWear' (RSC 0x1814 + NanoWear steps)");
     }
+#elif defined(COM_MODE_DEBUG)
+    Serial.println("[MODE] DEBUG");
+#endif
 }
 
 void loop() {
     unsigned long now = millis();
 
+#if defined(COM_MODE_BLE)
     // Pump the BLE radio every tick (non-blocking). This services incoming
     // connections and any reset command the phone may have written.
     ble.poll();
@@ -153,6 +199,9 @@ void loop() {
     // Reflect connection state on the status LED: blue while advertising, off
     // once a phone is connected.
     digitalWrite(LEDB, ble.isConnected() ? HIGH : LOW);
+#elif defined(COM_MODE_DEBUG)
+    // No BLE radio in DEBUG mode; nothing to pump here.
+#endif
 
 #ifdef NANOWEAR_RUNNING_DYNAMICS
     // (Dual-core Core0: BLE + snapshot read only — see loop1() for the poll.)
@@ -160,10 +209,12 @@ void loop() {
     // Throttle for the "not logging" diagnostic so it doesn't flood Serial.
     static unsigned long lastStateDiagMs = 0;
 
+#if defined(COM_MODE_DEBUG)
     // Debug command channel (USB Serial). Non-blocking: reads any pending byte
     // and acts on single-character commands (r/d/g/l/c/s/?) without disrupting
     // logging. Handles the user's "extract logs without Bluetooth" dev path.
     debug.pollSerial();
+#endif
 
     // Power-optimised, non-blocking poll: act only when LOGGING and the 2s
     // window has elapsed.
@@ -179,14 +230,32 @@ void loop() {
         // tests/e2e/README.md.
         Serial.println("[NW] BOOT_OK");
 
+        // Communication-mode heartbeat (mirrors [NW] BOOT_OK): re-emitted every
+        // poll so the e2e harness detects which build is flashed even if it
+        // attached after the one-shot boot banner.
+#if defined(COM_MODE_BLE)
+        Serial.println("[MODE] BLE");
+        // While advertising (no phone connected), re-emit the advertising
+        // confirmation as a heartbeat so the e2e harness can confirm the radio
+        // came up even if it attached after the one-shot boot banner. It stops
+        // once a phone connects (the [BLE] Advertising line then disappears).
+        if (!ble.isConnected()) {
+            Serial.println("[BLE] Advertising as 'NanoWear' (RSC 0x1814 + NanoWear steps)");
+        }
+#elif defined(COM_MODE_DEBUG)
+        Serial.println("[MODE] DEBUG");
+#endif
+
         uint16_t delta = pedometer.update();
         uint16_t total = pedometer.getTotal();
 
-        // Persist this reading to the in-RAM log only on a good read, so a
-        // failed I2C read never injects a duplicate/stale timestamp.
+#if defined(COM_MODE_DEBUG)
+        // Persist this reading to the in-RAM ring buffer only on a good read, so
+        // a failed I2C read never injects a duplicate/stale timestamp.
         if (pedometer.readOk()) {
             stepLog.record(now, total);
         }
+#endif
 
         Serial.print("[PEDOMETER] Total steps: ");
         Serial.println(total);
@@ -199,8 +268,10 @@ void loop() {
             Serial.println("[PEDOMETER] Warning: step-count read failed (I2C error).");
         }
 
+#if defined(COM_MODE_BLE)
         // Push the latest total to any connected phone (Notify + custom char).
         ble.notifySteps(total);
+#endif
     } else if (tracker.state() != TrackerState::LOGGING
                && tracker.state() != TrackerState::DEBUG
                && now - lastStateDiagMs >= 5000) {
@@ -215,7 +286,7 @@ void loop() {
 #endif
 }
 
-#ifdef NANOWEAR_RUNNING_DYNAMICS
+#if defined(NANOWEAR_RUNNING_DYNAMICS) && defined(COM_MODE_BLE)
 // ---------------------------------------------------------------------------
 // Core1 — IMU owner: FIFO drain -> detector -> shared snapshot
 // ---------------------------------------------------------------------------

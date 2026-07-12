@@ -10,7 +10,10 @@
 #
 # Per-feature convention: drop a test_<feature>.py in this directory. Define one
 # or more functions named test_*(ctx). They are auto-discovered and run in order.
-# See README.md for the contract (serial markers the firmware must emit).
+# A module may declare `MODE = "ble"` or `MODE = "debug"`; the harness skips it
+# when the flashed firmware reports a different [MODE] banner, so a BLE build
+# doesn't falsely fail the DEBUG dump test and vice-versa. See README.md for the
+# contract (serial markers the firmware must emit).
 #
 # Usage:
 #   python3 tests/e2e/run_e2e.py --port /dev/ttyACM0 --baud 115200 [--timeout 30]
@@ -41,10 +44,11 @@ class SerialCtx:
     test function begins), or raises AssertionError on timeout.
     """
 
-    def __init__(self, lines, lock, timeout):
+    def __init__(self, lines, lock, timeout, ser):
         self._lines = lines
         self._lock = lock
         self._timeout = timeout
+        self._ser = ser
 
     def expect(self, pattern, timeout=None):
         """Block until a line matching `pattern` (regex) appears, returning it.
@@ -63,6 +67,11 @@ class SerialCtx:
         raise AssertionError(
             f"timeout ({timeout}s) waiting for /{pattern}/ on serial"
         )
+
+    def write(self, data):
+        """Write raw bytes to the board's serial port (e.g. send a DebugConsole
+        command like b'l\\n'). Used by tests that drive the device."""
+        self._ser.write(data)
 
 
 def _reader(ser, lines, lock, stop):
@@ -108,6 +117,23 @@ def _make_failing_test(name, exc):
     return _t
 
 
+def _detect_firmware_mode(lines, lock, timeout):
+    """Read the firmware's `[MODE] BLE|DEBUG` banner (printed at boot) so tests
+    written for the *other* comm mode can be skipped. Returns 'ble'/'debug'/None
+    (None if the banner never appears — e.g. an older build, or a board that
+    failed to boot)."""
+    rx = re.compile(r"\[MODE\]\s*(BLE|DEBUG)")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with lock:
+            for line in lines:
+                m = rx.search(line)
+                if m:
+                    return m.group(1).lower()
+        time.sleep(0.05)
+    return None
+
+
 def _discover_tests():
     """Find test_<feature>.py files and collect their test_* functions."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -122,11 +148,12 @@ def _discover_tests():
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
         except Exception as e:  # noqa: BLE001 - record as a FAIL, don't crash
-            collected.append((f"{fname}:<load-error>", _make_failing_test(fname, e)))
+            collected.append((f"{fname}:<load-error>", _make_failing_test(fname, e), None))
             continue
+        mode = getattr(mod, "MODE", None)   # optional per-file comm-mode gate
         for attr in dir(mod):
             if attr.startswith("test_") and callable(getattr(mod, attr)):
-                collected.append((f"{fname}:{attr}", getattr(mod, attr)))
+                collected.append((f"{fname}:{attr}", getattr(mod, attr), mode))
     return collected
 
 
@@ -160,13 +187,32 @@ def main():
         print("no e2e tests discovered in tests/e2e/")
         sys.exit(1)
 
-    print(f"==> running {len(tests)} on-device e2e test(s) on {args.port}…")
+    # Detect which comm mode the flashed firmware runs (from its [MODE] banner)
+    # so we skip tests written for the other mode. A mode mismatch is not a
+    # failure — e.g. a BLE flash simply doesn't exercise the DEBUG dump.
+    firmware_mode = _detect_firmware_mode(lines, lock, args.timeout)
+
+    print(f"==> running on-device e2e tests on {args.port}"
+          + (f" (firmware mode: {firmware_mode})"
+             if firmware_mode else ""))
 
     failures = []
-    for name, fn in tests:
+    skipped = []
+    for name, fn, mode in tests:
+        # A mode-gated test runs only if the firmware reported a matching
+        # [MODE] banner. If the banner is missing (old build, or the board
+        # failed to boot), skip rather than fail — a non-booting board should
+        # surface through the mode-agnostic boot tests, not as false negatives.
+        if mode is not None and (firmware_mode is None or mode != firmware_mode):
+            reason = (f"firmware mode '{firmware_mode}'"
+                      if firmware_mode is not None
+                      else "firmware [MODE] banner not detected")
+            print(f"SKIP  {name} ({reason}; test requires '{mode}')")
+            skipped.append(name)
+            continue
         # Every test scans the whole captured session (from the start), so a
         # feature's marker emitted before the test begins is still seen.
-        ctx = SerialCtx(lines, lock, args.timeout)
+        ctx = SerialCtx(lines, lock, args.timeout, ser)
         try:
             fn(ctx)
             print(f"PASS  {name}")
@@ -180,10 +226,12 @@ def main():
     stop.set()
     ser.close()
 
+    ran = len(tests) - len(skipped)
     if failures:
-        print(f"\n{len(failures)}/{len(tests)} e2e test(s) FAILED: {failures}")
+        print(f"\n{len(failures)}/{ran} e2e test(s) FAILED "
+              f"({len(skipped)} skipped): {failures}")
         sys.exit(1)
-    print(f"\n{len(tests)}/{len(tests)} e2e test(s) PASSED")
+    print(f"\n{ran}/{ran} e2e test(s) PASSED ({len(skipped)} skipped)")
 
 
 if __name__ == "__main__":

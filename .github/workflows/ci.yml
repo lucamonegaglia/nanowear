@@ -21,9 +21,14 @@ jobs:
         run: python -m pip install --upgrade pip platformio
 
       # 1) Firmware must compile for the real board (catches I2C / Arduino API
-      #    regressions even though we cannot flash in CI).
-      - name: Build firmware (Nano RP2040 Connect)
+      #    regressions even though we cannot flash in CI). Both communication
+      #    modes are compile-checked: BLE RSC streaming (default) and the
+      #    USB-Serial DEBUG ring-buffer dump (see platformio.ini COM_MODE).
+      - name: Build firmware (Nano RP2040 Connect — BLE mode)
         run: pio run -e nanorp2040connect
+
+      - name: Build firmware (Nano RP2040 Connect — DEBUG mode)
+        run: pio run -e nanorp2040connect-debug
 
       # 2) Host unit + simulated end-to-end tests (no board required).
       - name: Run native unit tests

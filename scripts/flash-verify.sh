@@ -22,8 +22,13 @@
 #
 # Usage:
 #   ./scripts/flash-verify.sh [--agent <id>] [--port /dev/ttyACM0] [--baud 115200]
-#                             [--e2e-timeout 30] [--no-flash] [--no-build]
+#                             [--env nanorp2040connect] [--e2e-timeout 30]
+#                             [--no-flash] [--no-build]
 #
+#   --env <name>  PlatformIO environment to build/flash. Defaults to
+#                 nanorp2040connect (BLE RSC streaming). Use
+#                 nanorp2040connect-debug to verify the USB-Serial ring-buffer
+#                 dump build (see platformio.ini COM_MODE switch).
 #   --no-flash  skip the build+upload and just (re)run the e2e harness against
 #               the firmware already on the board. Useful after a manual reset,
 #               or to re-run tests without re-flashing. (A fresh boot sentinel
@@ -43,6 +48,7 @@ cd "$ROOT"
 AGENT="${USER:-local}-flash-verify"
 PORT="/dev/ttyACM0"
 BAUD="115200"
+ENV="nanorp2040connect"
 E2E_TIMEOUT="15"
 DO_BUILD=1
 DO_FLASH=1
@@ -52,6 +58,7 @@ while [[ $# -gt 0 ]]; do
         --agent)        AGENT="${2:-}"; shift 2 || true ;;
         --port)         PORT="${2:-}"; shift 2 || true ;;
         --baud)         BAUD="${2:-}"; shift 2 || true ;;
+        --env)          ENV="${2:-nanorp2040connect}"; shift 2 || true ;;
         --e2e-timeout)  E2E_TIMEOUT="${2:-}"; shift 2 || true ;;
         --no-flash)     DO_FLASH=0; shift ;;
         --no-build)     DO_BUILD=0; shift ;;
@@ -60,7 +67,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-PURPOSE="flash-verify (build=$DO_BUILD flash=$DO_FLASH e2e)"
+PURPOSE="flash-verify (env=$ENV build=$DO_BUILD flash=$DO_FLASH e2e)"
 
 cleanup() {
     ./scripts/board-lock.sh release "$AGENT" >/dev/null 2>&1 || true
@@ -73,13 +80,13 @@ echo "==> Claiming board ($AGENT)…"
 ./scripts/board-lock.sh claim "$AGENT" --purpose "$PURPOSE"
 
 if (( DO_BUILD )); then
-    echo "==> Building firmware (pio run -e nanorp2040connect)…"
-    pio run -e nanorp2040connect
+    echo "==> Building firmware (pio run -e $ENV)…"
+    pio run -e "$ENV"
 fi
 
 if (( DO_FLASH )); then
-    echo "==> Flashing firmware to $PORT (pio run -e nanorp2040connect -t upload)…"
-    pio run -e nanorp2040connect -t upload
+    echo "==> Flashing firmware to $PORT (pio run -e $ENV -t upload)…"
+    pio run -e "$ENV" -t upload
 fi
 
 echo "==> Running on-device e2e harness (tests/e2e)…"

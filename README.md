@@ -22,6 +22,7 @@ and points to the detailed docs for everything else.
 | **Resilient step reads** | ✅ Working | I2C transport errors are surfaced (not swallowed); a backward counter reading clamps the delta to zero; a failed read loses/invents no steps. |
 | **Host-testable core** | ✅ Working | Step logic sits behind the `IMUSensor` interface with a `MockIMU` double, so the pure logic is unit-tested on the host with no board. |
 | **CI** | ✅ Green | Builds the firmware and runs the native test suite on every push/PR. |
+| **Switchable comm modes** | ✅ Working | Two build-time modes via the `COM_MODE` macro in `platformio.ini`: BLE RSC streaming to a phone (`nanorp2040connect`) or USB-Serial dump of the in-RAM step ring buffer (`nanorp2040connect-debug`). Mutually exclusive — the BLE radio isn't compiled into the DEBUG build. |
 
 Verified now: `pio test -e native` → **23/23** tests pass; `pio run -e nanorp2040connect`
 → firmware builds (RAM 15.7% / Flash 0.2%). Hardware end-to-end is gated (the
@@ -78,7 +79,7 @@ These are fixed (from [AGENTS.md](AGENTS.md)) and will not change:
 - **RGB status LED:** driven through the NINA via `WiFiNINA.h` (`LEDR`/`LEDG`/`LEDB`),
   common-anode / **active-low** (`LOW` = ON). *The LED scheme is locked in, but the
   firmware does not drive the LED yet* — it is reserved for future status feedback.
-- **Libraries wired in `platformio.ini`:** `WiFiNINA`, `TinyGPSPlus`, `Arduino_LSM6DSOX`.
+- **Libraries wired in `platformio.ini`:** `WiFiNINA`, `ArduinoBLE`, `TinyGPSPlus`, `Arduino_LSM6DSOX`.
 
 ---
 
@@ -88,7 +89,6 @@ These appear in the product vision but are **not built** — see
 [ROADMAP.md](ROADMAP.md) for the full plan and open questions:
 
 - **GPS module** — `TinyGPSPlus` is wired in, but no code reads an external GPS yet.
-- **BLE RSC peripheral** — advertise steps/cadence to a phone app (RunnerUp/OpenTracks).
 - **Power management** — battery, charging, deep-sleep with motion wake.
 - **Offline storage** — on-board flash buffering of `.gpx`-structured tracks.
 - **Strava sync** — phone app uploads the device-built GPX.
@@ -102,14 +102,15 @@ These appear in the product vision but are **not built** — see
 # Run host unit + simulated end-to-end tests (no board needed)
 pio test -e native
 
-# Build the firmware for the Nano RP2040 Connect
+# Build the firmware for the Nano RP2040 Connect (BLE RSC streaming, default)
 pio run -e nanorp2040connect
 
-# Flash + watch Serial (the board is shared — claim it first)
-./scripts/board-lock.sh claim my-agent-id --purpose "verify steps"
-pio run -e nanorp2040connect -t upload
-pio device monitor -b 115200
-./scripts/board-lock.sh release my-agent-id
+# Or the DEBUG build: dump the in-RAM step ring buffer over USB Serial
+pio run -e nanorp2040connect-debug
+
+# Flash + run the on-device e2e harness (claims the shared board, builds, flashes)
+./scripts/flash-verify.sh                                 # BLE mode
+./scripts/flash-verify.sh --env nanorp2040connect-debug   # DEBUG mode
 ```
 
 PlatformIO lives at `~/.platformio/penv/bin` (or use `python3 -m platformio`).
