@@ -62,7 +62,7 @@ jobs:
           # OPENROUTER_API_KEY if ANTHROPIC_API_KEY is unset.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.OPENROUTER_API_KEY }}
           # For OpenRouter / other proxies: the Anthropic-compatible base URL
-          # (OpenRouter uses https://openrouter.ai/api — NO /v1, the CLI adds it)
+          # (OpenRouter uses https://openrouter.ai/api — NO /v1, the CLI appends it)
           # and the model slug, e.g. tencent/hy3:free. Leave blank for Anthropic.
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
           CLAUDE_MODEL: ${{ secrets.CLAUDE_MODEL }}
@@ -87,10 +87,11 @@ jobs:
           git config --global user.name "claude-code-bot[bot]"
           git config --global user.email "claude-code-bot@users.noreply.github.com"
 
-          # We resolve conflicts by asking Claude to RETURN the resolved file
-          # content as text (no tool use required), then write it back here.
-          # This is model-agnostic and avoids relying on the model's ability
-          # to drive git / Edit tools in headless mode. See the per-file loop.
+          # Headless Claude resolves the conflicts by driving the Edit/Write
+          # tools natively — exactly as it would interactively. We hand it the
+          # list of conflicted files; it edits each to merge both sides and
+          # strips the markers. No text-extraction workaround: the model is
+          # fully capable of tool use, so we let it do the work.
 
           MERGED_PR="${{ github.event.pull_request.number || 'manual' }}"
           FAILURES=0
@@ -148,10 +149,10 @@ jobs:
             # `main` is the second line of defense — see PR description.)
             rm -rf .claude CLAUDE.md
 
-            # Resolve each conflicted file by asking Claude to RETURN the
-            # resolved file content as plain text; the script writes it back.
-            # This avoids depending on the model's tool-use ability (which
-            # weaker models often lack in headless -p mode).
+            # Find the conflicted files, then let ONE headless Claude run drive
+            # the Edit tool to resolve them all. The model is given the file
+            # list and clear instructions; it reads each file, merges both
+            # sides, and removes the markers — no text-return workaround.
             CONFLICTED="$(git diff --name-only --diff-filter=U)"
             if [ -z "$CONFLICTED" ]; then
               echo "::warning::Merge reported conflicts but no unmerged paths found; aborting."
@@ -161,42 +162,26 @@ jobs:
             fi
             echo "Conflicted files:"; echo "$CONFLICTED"
 
-            while IFS= read -r f; do
-              [ -z "$f" ] && continue
-              echo "Resolving conflict in: $f"
-              PROMPTFILE="$(mktemp)"
-              {
-                echo "You are resolving a git merge conflict in ONE file. The file content below contains git conflict markers of the form <<<<<<< HEAD ... ======= ... >>>>>>> <branch>. Merge both sides, keeping the intent of each. Respond with ONLY the complete resolved file content: no explanation, no markdown, no code fences, and NO conflict markers. Preserve every non-conflicted line exactly."
-                echo
-                echo "===== FILE: $f ====="
-                cat "$f"
-              } > "$PROMPTFILE"
-              OUTFILE="$(mktemp)"
-              # Claude may fail; we verify the result instead of aborting.
-              claude -p "$(cat "$PROMPTFILE")" "${CLAUDE_ARGS[@]}" > "$OUTFILE" 2>/dev/null || true
-              rm -f "$PROMPTFILE"
-              # Strip a single surrounding markdown code fence ONLY when it is
-              # symmetric (first AND last line are fences), so we never delete
-              # a genuine last line of a file that merely opens with a fence.
-              RESOLVED="$(mktemp)"
-              if head -n1 "$OUTFILE" | grep -q '^```' && tail -n1 "$OUTFILE" | grep -q '^```'; then
-                sed '1d;$d' "$OUTFILE" > "$RESOLVED"
-              else
-                cp "$OUTFILE" "$RESOLVED"
-              fi
-              rm -f "$OUTFILE"
-              # Prefer the on-disk file (Claude may have edited it via tools);
-              # otherwise apply Claude's returned text when it is marker-free.
-              if ! grep -qE '^(<<<<<<<|>>>>>>>)' "$f"; then
-                echo "  $f resolved on disk."
-              elif [ -s "$RESOLVED" ] && ! grep -qE '^(<<<<<<<|>>>>>>>)' "$RESOLVED"; then
-                cp "$RESOLVED" "$f"
-                echo "  $f resolved from Claude's reply."
-              else
-                echo "::warning::$f was not resolved (markers remain); keeping original."
-              fi
-              rm -f "$RESOLVED"
-            done <<< "$CONFLICTED"
+            PROMPTFILE="$(mktemp)"
+            {
+              echo "You are resolving git merge conflicts in this repository. A merge of origin/main into the current branch is in progress and has left conflict markers. Resolve EVERY file listed below by editing it to contain the correctly merged content — keep the intent of BOTH sides (HEAD and the incoming branch)."
+              echo
+              echo "For each file:"
+              echo "  1. Read the file and locate the conflict markers: <<<<<<< HEAD ... ======= ... >>>>>>> <branch>."
+              echo "  2. Replace the entire marked block with the merged result. Preserve all other (non-conflicted) lines exactly."
+              echo "  3. Ensure NO conflict markers remain in the file when you finish."
+              echo
+              echo "Do NOT run any git commands, do NOT commit, and do NOT push. When you are done, every file listed below must be free of conflict markers."
+              echo
+              echo "Conflicted files:"
+              echo "$CONFLICTED"
+            } > "$PROMPTFILE"
+
+            # Claude drives the tools itself. A non-zero exit is non-fatal: we
+            # verify the actual result (marker-free, staged) rather than trusting
+            # the exit code.
+            claude -p "$(cat "$PROMPTFILE")" "${CLAUDE_ARGS[@]}" || true
+            rm -f "$PROMPTFILE"
 
             # Stage the previously-unmerged files (only those paths).
             printf '%s\n' "$CONFLICTED" | xargs -r git add || true
