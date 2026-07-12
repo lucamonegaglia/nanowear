@@ -25,6 +25,11 @@ public:
     // Read the cumulative step count. Returns false on a transport error.
     bool readStepCount(uint16_t& out) override;
 
+    // Zero the hardware step counter in place (PEDO_RST_STEP), without
+    // re-running the full pedometer init. Used when a phone requests a reset
+    // over BLE. Mirrors step 3 of initHardwarePedometer.
+    void resetPedometerSteps();
+
 private:
     // Write a single byte to an IMU register over I2C. Returns true on ACK.
     bool writeRegister(uint8_t reg, uint8_t value);

@@ -231,8 +231,12 @@ e.g. on-device GPS fusion, custom haptics cues, or a branded UI):
   we advertise; otherwise add a custom characteristic for raw step count.
 - **BLE range/antenna from the ankle:** body wear attenuates 2.4 GHz. Validate
   reliable connection at arm's-length; may need antenna placement care.
-- **NINA firmware flash:** the 3.0.1 flash is a one-time board prep step; document it
-  precisely (esptool flags differ: `--before no_reset` for this board).
+- **NINA firmware flash:** DONE — NINA updated to 3.0.1 on 2026-07-11 via `esptool`
+  (no Arduino IDE / root needed; exact procedure in `docs/BLE_SETUP.md`). BLE now
+  works end-to-end against the live board.
+- **Audio to headphones (A2DP):** NOT feasible with the NINA/ArduinoBLE stack —
+  A2DP is Bluetooth Classic, but the module exposes only BLE (GATT) + Wi-Fi. Use a
+  separate classic-BT audio module if audio cues are wanted. (Evaluated 2026-07-11.)
 - **Sleep vs BLE:** deep-sleep + BLE advertising bursts need careful timing so the
   phone doesn't drop the pairing.
 
@@ -266,6 +270,22 @@ the relevant close-out checks (e.g. H0/S0).
 - **Hardware e2e on the Nano RP2040 Connect** — N/A in CI (no device on default
   runner). To close: claim the board, flash, and confirm sane step counts +
   INT1 step-detection (H0 close-out).
+
+### BLE link — verified end-to-end on hardware (2026-07-11)
+- **NINA firmware:** updated to **3.0.1** via `esptool` (board-specific binary
+  from `arduino/nina-fw` 3.0.1, flashed through `SerialNINAPassthrough`). No
+  Arduino IDE / root required.
+- **`pio run -e nanorp2040connect`** — PASS; sketch advertises `NanoWear`
+  (RSC `0x1814` + custom steps/control).
+- **Hardware e2e:** a BLE central on this host connected, read RSC Feature /
+  Sensor Location / Steps, received step + cadence **notifications**, and the
+  **reset control write (0x01) was acknowledged** by the board
+  (`[BLE] Step reset requested by phone`). Steps read 0 only because the bench
+  unit is stationary.
+- **Headphones / audio:** evaluated — A2DP is Bluetooth Classic; NINA/ArduinoBLE
+  is BLE-only, so streaming audio to headphones is not feasible (plan a separate
+  classic-BT module if needed).
+- **`pio test -e native`** — PASS (34/34: RSC codec + MockBlePeripheral).
 
 ---
 

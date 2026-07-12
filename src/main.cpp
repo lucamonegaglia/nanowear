@@ -1,7 +1,10 @@
 #include <Arduino.h>
+#include <WiFiNINA.h>            // onboard RGB LED (LEDR/LEDG/LEDB); active-low
 #include "hardware_imu.h"
 #include "pedometer.h"
 #include "state_machine.h"
+#include "ble_peripheral.h"
+#include "ble_peripheral_arduino.h"  // board-only concrete BLE driver
 
 // ---------------------------------------------------------------------------
 // NanoWear firmware — screenless ankle-worn fitness tracker
@@ -19,6 +22,17 @@
 static HardwareIMU imu;
 static Pedometer pedometer(imu);
 static StateMachine tracker(2000); // poll the isolated HW counter every 2s while LOGGING
+static ArduinoBlePeripheral ble;   // phone link (NINA BLE, RSC + custom service)
+
+// Reset handler invoked by the phone over BLE: zero the hardware pedometer and
+// our accumulator. Declared as a plain function so it matches the C-style
+// StepResetCallback the driver expects (no captures needed — it uses the
+// module globals above).
+void handleStepReset() {
+    imu.resetPedometerSteps();
+    pedometer.reset();
+    Serial.println("[BLE] Step reset requested by phone");
+}
 
 // Throttle for the "not logging" diagnostic so it doesn't flood Serial.
 static unsigned long lastStateDiagMs = 0;
@@ -42,10 +56,37 @@ void setup() {
     pedometer.reset();
     tracker.startLogging(millis());
     Serial.println("[STATE] BOOT complete -> LOGGING");
+
+    // Report the NINA module firmware version. BLE over the NINA-W102 requires
+    // firmware >= 3.0.1 (see docs/BLE_SETUP.md); older versions make BLE.begin()
+    // fail and must be flashed via the Arduino IDE / esptool before the radio
+    // works. Printing it here makes the gate visible from the serial monitor.
+    Serial.print("[BLE] NINA firmware: ");
+    Serial.println(WiFi.firmwareVersion());
+
+    // Start the BLE peripheral (advertise as "NanoWear"). The RGB LED is the
+    // at-a-glance status: blue = advertising/discoverable, off = connected.
+    pinMode(LEDB, OUTPUT);
+    if (!ble.begin("NanoWear")) {
+        Serial.println("[BLE] ERROR: failed to start peripheral (NINA firmware < 3.0.1?)");
+        digitalWrite(LEDB, HIGH); // LED off: BLE not active
+    } else {
+        ble.onStepReset(handleStepReset);
+        digitalWrite(LEDB, LOW); // blue ON = advertising
+        Serial.println("[BLE] Advertising as 'NanoWear' (RSC 0x1814 + NanoWear steps)");
+    }
 }
 
 void loop() {
     unsigned long now = millis();
+
+    // Pump the BLE radio every tick (non-blocking). This services incoming
+    // connections and any reset command the phone may have written.
+    ble.poll();
+
+    // Reflect connection state on the status LED: blue while advertising, off
+    // once a phone is connected. (Green could be used for "connected" instead.)
+    digitalWrite(LEDB, ble.isConnected() ? HIGH : LOW);
 
     // Power-optimised, non-blocking poll: act only when LOGGING and the 2s
     // window has elapsed.
@@ -74,6 +115,9 @@ void loop() {
         if (!pedometer.readOk()) {
             Serial.println("[PEDOMETER] Warning: step-count read failed (I2C error).");
         }
+
+        // Push the latest total to any connected phone (Notify + custom char).
+        ble.notifySteps(total);
     } else if (tracker.state() != TrackerState::LOGGING
                && now - lastStateDiagMs >= 5000) {
         // We are paused outside LOGGING (e.g. BOOT after a sensor failure, or a

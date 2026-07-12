@@ -1,0 +1,11 @@
+# Pinned for the device emulator (tools/ble_device_emulator.py).
+#
+# bleak 3.x removed its GATT *server* (BleakServer), so the device emulator
+# needs an older bleak that still exposes it. Keep this isolated in a venv so
+# it never overwrites the system bleak 3.x that the phone emulator
+# (tools/ble_phone_emulator.py) uses:
+#
+#   python3 -m venv .venv-dev
+#   .venv-dev/bin/pip install -r tools/requirements-device-emulator.txt
+#   sudo .venv-dev/bin/python tools/ble_device_emulator.py
+bleak==0.22.3
