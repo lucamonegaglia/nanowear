@@ -97,13 +97,8 @@ jobs:
             # Start from a clean copy of the PR branch.
             git checkout -B "$PR_BRANCH" "origin/$PR_BRANCH"
 
-            # Drop untracked/ignored leftovers from a previous PR's Claude run,
-            # then strip the PR's own .claude/ and CLAUDE.md so a malicious
-            # branch cannot inject hooks/settings/project instructions into the
-            # headless Claude run. (Branch protection on `main` is the second
-            # line of defense — see PR description.)
+            # Drop untracked/ignored leftovers from a previous PR's Claude run.
             git clean -fdx
-            rm -rf .claude CLAUDE.md
 
             # Attempt the merge. A clean outcome means no conflicts to fix.
             if git merge --no-commit --no-ff origin/main >/dev/null 2>&1; then
@@ -114,6 +109,13 @@ jobs:
             fi
 
             echo "PR #$PR_BRANCH conflicts with main — asking Claude to resolve."
+
+            # Strip any project config (.claude/, CLAUDE.md) from the merged
+            # tree so a malicious branch OR main cannot inject hooks/settings/
+            # instructions into the headless Claude run. (Branch protection on
+            # `main` is the second line of defense — see PR description.)
+            rm -rf .claude CLAUDE.md
+
             claude -p "$RESOLVE_PROMPT" \
               --dangerously-skip-permissions \
               --max-turns 12
