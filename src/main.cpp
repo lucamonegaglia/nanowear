@@ -160,22 +160,6 @@ void loop() {
     // Throttle for the "not logging" diagnostic so it doesn't flood Serial.
     static unsigned long lastStateDiagMs = 0;
 
-    // Push the latest metrics to any connected phone. Reads are lock-guarded
-    // and throttled by the "new" flags Core1 sets, so we only notify on fresh
-    // data (and never block on I2C).
-    if (ble.isConnected()) {
-        GaitMetrics g;
-        uint16_t steps = 0;
-        bool gaitNew = false, stepsNew = false;
-        uint32_t save = spin_lock_blocking(g_lock);
-        if (g_gaitNew)  { g = g_latestGait;  g_gaitNew  = false; gaitNew  = true; }
-        if (g_stepsNew) { steps = g_latestSteps; g_stepsNew = false; stepsNew = true; }
-        spin_unlock(g_lock, save);
-
-        if (gaitNew)  ble.notifyGait(g);
-        if (stepsNew) ble.notifySteps(steps);
-    }
-#else
     // Debug command channel (USB Serial). Non-blocking: reads any pending byte
     // and acts on single-character commands (r/d/g/l/c/s/?) without disrupting
     // logging. Handles the user's "extract logs without Bluetooth" dev path.

@@ -75,11 +75,12 @@ void test_gait_detector_recovers_contact_and_cadence(void) {
     TEST_ASSERT_TRUE(det.isCalibrated());
 
     // Running: pitch rate gx = -cos(2*pi*t/250) => minima every 250 ms.
-    // Flat accel => vertical oscillation / braking stay ~0 (proxies only).
+    // A constant horizontal accel (ax) exercises the braking/overstride proxy;
+    // vertical accel stays ~0 so oscillation/air-time stay ~0 (proxies only).
     const float kTwoPi = 6.2831853f;
     for (int i = 64; i <= 820; i++) {
         float t = static_cast<float>(i);
-        s.ax = 0; s.ay = 0; s.az = 1;
+        s.ax = 0.3f; s.ay = 0; s.az = 1;     // 0.3g horizontal (braking/impact)
         s.gx = -cosf(kTwoPi * t / 250.0f);   // pitch rate (pitch axis = x)
         s.gy = 0; s.gz = 0;
         s.ts = static_cast<uint32_t>(i);
@@ -93,10 +94,12 @@ void test_gait_detector_recovers_contact_and_cadence(void) {
     TEST_ASSERT_FLOAT_WITHIN(250.0f, m.contactTimeMs, 15.0f);
     TEST_ASSERT_FLOAT_WITHIN(500.0f, m.stepTimeMs,    15.0f);
     TEST_ASSERT_FLOAT_WITHIN(120.0f, m.cadenceSpm,     4.0f);
-    // Strike must be classified (not UNKNOWN); proxies must be finite + non-negative.
+    // Strike must be classified (not UNKNOWN); proxies must be finite + sane.
     TEST_ASSERT_TRUE(m.strike != StrikePattern::UNKNOWN);
     TEST_ASSERT_TRUE(m.verticalOscillationMm >= 0.0f);
-    TEST_ASSERT_TRUE(m.brakingIndex >= 0.0f);
+    // Braking window is captured and read on the completed stride (fix: the
+    // window was previously zeroed before it was read, pinning this to 0).
+    TEST_ASSERT_TRUE(m.brakingIndex > 0.0f);
 }
 
 // --- codec: GaitMetrics pack/unpack round-trip ---------------------------
