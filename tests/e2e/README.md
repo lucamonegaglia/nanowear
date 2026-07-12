@@ -8,7 +8,8 @@ Cloud CI has no device attached, so these run **locally on the dev PC the board
 is wired to**, via:
 
 ```bash
-./scripts/flash-verify.sh            # claim board -> build -> flash -> run e2e
+./scripts/flash-verify.sh                                     # BLE RSC streaming (default env)
+./scripts/flash-verify.sh --env nanorp2040connect-debug       # USB-Serial ring-buffer dump
 ```
 
 `flash-verify.sh` holds the shared board lock the whole time, then launches
@@ -48,15 +49,41 @@ firmware must emit stable, machine-readable markers:
 
 | Marker | Meaning | Emitted by |
 |--------|---------|------------|
+| `[MODE] BLE` | Comm-mode banner: this build streams RSC to a phone over BLE | `src/main.cpp` `setup()` |
+| `[MODE] DEBUG` | Comm-mode banner: this build dumps the in-RAM ring buffer | `src/main.cpp` `setup()` |
 | `[NW] BOOT_OK` | Firmware is in `LOGGING` (boot succeeded); re-emitted on every `LOGGING` poll as a heartbeat | `src/main.cpp` `loop()` |
 | `[STATE] BOOT complete -> LOGGING` | Human-readable equivalent of the above | `src/main.cpp` |
 | `[STATE] Not logging (…)` | Boot failed (e.g. IMU not found); device is responsive, not hung | `src/main.cpp` `loop()` |
 | `[PEDOMETER] Total steps: <n>` | A polled step total (uint16, 0–65535) | `src/main.cpp` `loop()` |
 | `[PEDOMETER] New steps this poll: <n>` | Non-zero delta since last poll | `src/main.cpp` `loop()` |
 | `[PEDOMETER] Warning: step-count read failed (I2C error)` | Graceful I2C read failure | `src/main.cpp` `loop()` |
+| `[BLE] NINA firmware: <v>` | NINA module firmware version (BLE needs >= 3.0.1) | `src/main.cpp` `setup()` |
+| `[BLE] Advertising as 'NanoWear' (RSC 0x1814 + NanoWear steps)` | BLE peripheral up and advertising; re-emitted every poll while no phone is connected (heartbeat), so the harness catches it regardless of attach timing | `src/main.cpp` `setup()` / `loop()` |
+| `[BLE] Step reset requested by phone` | Phone sent the reset control write | `src/main.cpp` `handleStepReset()` |
+| `[LOG START]` … `[LOG END]` | In-RAM ring-buffer dump (CSV, `<tMillis>,<totalSteps>` per line) | `src/debug_console.cpp` `cmdDump()` |
 
 When you add a firmware feature, add its marker(s) here and assert on them in a
 test (below).
+
+## Communication modes (compile-time switch)
+
+The firmware ships two **mutually exclusive** communication modes, chosen at
+build time by the `COM_MODE` macro in `platformio.ini`:
+
+| Env | Macro | Behaviour |
+|-----|-------|-----------|
+| `nanorp2040connect` (default) | `COM_MODE_BLE` | Streams Running Speed & Cadence (RSC `0x1814`) + raw steps to a phone over the NINA BLE radio. Boots advertising as `NanoWear`. |
+| `nanorp2040connect-debug` | `COM_MODE_DEBUG` | No BLE. Records each poll to an in-RAM ring buffer (`StepLog`) and dumps it over USB Serial via the `DebugConsole` (`d` pause, `l` dump, `r` reset, `c` clear, `s` status, `?` help). |
+
+Switch modes by flashing the other env — the NINA firmware itself is unchanged
+(no `esptool` reflash needed), only the sketch. The BLE radio is not even
+compiled into the DEBUG build.
+
+A test module may declare `MODE = "ble"` or `MODE = "debug"` at module level;
+`run_e2e.py` reads the firmware's `[MODE]` banner and **skips** tests whose mode
+doesn't match the flashed build, so a BLE flash doesn't falsely fail the DEBUG
+dump test and vice-versa. Tests without a `MODE` (e.g. `test_boot.py`) run in
+both builds.
 
 ## Adding a test for a new feature
 
@@ -67,9 +94,11 @@ appears, then returns the line; it raises `AssertionError` on timeout (a FAIL).
 
 ```python
 # tests/e2e/test_ble.py
+MODE = "ble"
 def test_ble_advertises(ctx):
-    # Assert the new BLE feature's marker shows up on-device.
-    ctx.expect(r"\[BLE\] advertising", timeout=15)
+    # Assert the BLE feature's markers show up on-device.
+    ctx.expect(r"\[MODE\] BLE", timeout=15)
+    ctx.expect(r"\[BLE\] Advertising as 'NanoWear'", timeout=15)
 ```
 
 Rules:
