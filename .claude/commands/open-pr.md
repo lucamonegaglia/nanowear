@@ -4,8 +4,9 @@ Open a pull request for the current branch, but ONLY after a fresh-context code
 review. This command is the sanctioned path; `gh pr create` run directly will
 be blocked by a hook until a review for the current diff is on record.
 
-Optional args ($ARGUMENTS): extra flags/title for `gh pr create`, e.g.
-`--title "Add IMU init"`. Leave empty for `--fill` from the branch/commits.
+Optional args ($ARGUMENTS): extra flags for `gh pr create`, e.g.
+`--title "Add IMU init"` or `--base main`. The PR **body** is always rendered
+from `pull_request_template.md` (filled in step 5) — never from `--fill`.
 
 ## Steps
 
@@ -29,17 +30,36 @@ Optional args ($ARGUMENTS): extra flags/title for `gh pr create`, e.g.
 4. **Confirm (recommended).** Spawn the fresh review subagent again to confirm
    the must-fix list is now empty. If it still finds must-fix items, go to step 3.
 
-5. **Record the review and open the PR atomically.** Run this in ONE Bash call so
+5. **Compose the PR body from the template.** Read
+   `.github/pull_request_template.md` and fill in its four sections from the
+   review outcome and the branch diff. **Do NOT use `--fill`** — `--fill` only
+   pastes the commit list as the body and ignores the template, which is the bug
+   being corrected here. Replace each `<!-- -->` placeholder with real content
+   (or drop the comment line entirely):
+   - **What changed:** one or two sentences, plus a short bullet list of the
+     concrete changes (files / functions touched).
+   - **Why:** the motivation — which roadmap item or problem this addresses.
+   - **How it was verified:** what ran green (native tests, `pio run`,
+     `flash-verify.sh`).
+   - **Risks / follow-ups:** anything left open, board-prep steps, or next tasks.
+   Write the filled body to `.claude/.pr-body.md`. Also pick a concise `--title`
+   for the PR (e.g. the branch's primary change / first commit subject), unless
+   `$ARGUMENTS` already supplies `--title`.
+
+6. **Record the review and open the PR atomically.** Run this in ONE Bash call so
    the diff signature is computed at the same instant the PR is opened (nothing
    can change in between, which would make the hook block you). Make sure your
    work is committed first (step 1) so the reviewed scope equals the opened scope.
+   The signature sentinel satisfies the `gh pr create` hook for this exact diff.
 
    ```bash
    bash .claude/scripts/pr-review-sig.sh > .claude/.pr-review-ok \
-     && gh pr create --draft --fill "$ARGUMENTS"
+     && gh pr create --draft --body-file .claude/.pr-body.md --title "$PR_TITLE" $ARGUMENTS
    ```
 
-   The sentinel satisfies the `gh pr create` hook for this exact diff.
+   If `$ARGUMENTS` already contains `--title`, your `--title "$PR_TITLE"` is listed
+   first, so the user's title wins (last flag wins).
 
-6. **Report** the PR URL and a one-line summary of the review outcome (e.g.
-   "Fresh review: 3 must-fix addressed, 0 remaining; draft PR opened.").
+7. **Report** the PR URL and a one-line summary of the review outcome (e.g.
+   "Fresh review: 3 must-fix addressed, 0 remaining; draft PR opened with
+   template body.").
