@@ -4,6 +4,7 @@
 #include "step_codec.h"
 #include "elapsed_timer.h"
 #include "state_machine.h"
+#include "test_ble.h"   // BLE-link test prototypes (defined in test/test_ble.cpp)
 
 // ---------------------------------------------------------------------------
 // NanoWear host test suite.
@@ -212,5 +213,23 @@ int main(void) {
     RUN_TEST(test_sm_poll_rearm);
     RUN_TEST(test_sm_sync_cycle);
     RUN_TEST(test_sm_low_battery_and_recover);
+
+    // --- BLE link (rsc_codec + MockBlePeripheral) ---------------------------
+    RUN_TEST(test_rsc_flags_minimal);
+    RUN_TEST(test_rsc_flags_combo);
+    RUN_TEST(test_cadence_to_rsc_units);
+    RUN_TEST(test_encode_rsc_measurement);
+    RUN_TEST(test_encode_step_count_le);
+    RUN_TEST(test_encode_step_count_zero);
+    RUN_TEST(test_mock_begin_records_name);
+    RUN_TEST(test_mock_begin_can_fail);
+    RUN_TEST(test_mock_connection_reflects_flag);
+    RUN_TEST(test_mock_notify_records_last_value);
+    RUN_TEST(test_mock_reset_callback_invoked);
+
+    // --- BLE link: cadence derivation helper ---------------------------------
+    RUN_TEST(test_derive_cadence_zero_interval);
+    RUN_TEST(test_derive_cadence_basic);
+    RUN_TEST(test_derive_cadence_zero_delta);
     return UNITY_END();
 }

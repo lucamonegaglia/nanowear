@@ -9,9 +9,16 @@ Optional args ($ARGUMENTS): extra flags/title for `gh pr create`, e.g.
 
 ## Steps
 
-1. **Guardrails.** Confirm you are NOT on `main`. If you are, stop and tell the
-   user to switch to a feature branch first. **Commit** your work so the diff is
-   complete and the reviewed scope equals the scope that gets opened.
+1. **Guardrails.**
+   - Confirm you are NOT on `main`. If you are, stop and tell the user to switch
+     to a feature branch first.
+   - **Sync your branch with `main` first.** Run `git fetch && git merge origin/main` (or rebase)
+     before reviewing or opening, so your branch is based on the current `main`. The
+     branch diff and the `/code-review` in step 2 are measured against `main` — a
+     stale `main` makes the review miss conflicts and lets an out-of-date PR slip
+     through. Never open a PR against a `main` that isn't current.
+   - **Commit** your work so the diff is complete and the reviewed scope equals
+     the scope that gets opened.
 
 2. **Fresh-context review.** Spawn a FRESH subagent (via the Agent tool) to
    review the branch. The subagent starts with clean context — it has NOT seen

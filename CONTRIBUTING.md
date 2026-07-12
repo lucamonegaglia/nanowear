@@ -102,12 +102,14 @@ refactor(imu): extract IMUSensor interface from main.cpp
     changes that don't alter behaviour generally don't need a README touch-up.
   - Follow the PR template (`.github/pull_request_template.md`).
   - Explain *what* changed, *why*, and *how it was verified*.
-  - Be free of merge conflicts — rebase/merge onto the latest `main` and resolve
-    any conflict before opening the PR or requesting review.
+  - **Always update `main` before opening a PR:** run `git fetch && git merge origin/main`
+    (or rebase) so your branch is based on the current `main`, and resolve any
+    conflict that results. Never open a PR against a stale `main`.
 - Require at least one review. Use `/code-review` to self-review the diff
   before requesting a human review.
 - Example end-to-end flow:
   ```bash
+  git fetch && git merge origin/main   # sync with current main first
   git commit -m "test(native): add MockIMU run-loop simulation"
   git push -u origin feature/pedometer-unit-tests
   gh pr create --draft --fill
@@ -127,9 +129,14 @@ Three layers, cheapest first:
 2. **Simulated end-to-end (host)** — a test that replays a *sequence* of
    hardware step readings through the exact `Pedometer.update()` call the
    firmware `loop()` makes, asserting the totals/deltas the firmware would print.
-3. **Hardware e2e (board, gated)** — flash + serial check on the physical
-   Nano RP2040 Connect. Gated behind a self-hosted runner / manual run (no
-   device in default CI).
+3. **Hardware e2e (board, per-feature)** — flash the nano and run **one test
+   per firmware feature** that asserts the feature's debug output appears on the
+   device's serial port. This proves a feature *runs*, not just compiles. It is
+   a local step (the dev PC the board is wired to), driven by
+   `./scripts/flash-verify.sh` and the harness in `tests/e2e/`; cloud CI cannot
+   flash (no device attached), so it is gated behind a self-hosted runner / manual
+   run (see *CI* below). **Every new feature must ship its own
+   `tests/e2e/test_<feature>.py`.**
 
 ### Adding a test (example)
 
@@ -168,10 +175,52 @@ Rules:
 - Assert with `TEST_ASSERT_*`; script sensor behaviour via `MockIMU` (never real
   I2C in host tests).
 
+### Adding an on-device e2e test (layer 3)
+
+Hardware e2e lives under `tests/e2e/` and is run by `scripts/flash-verify.sh`
+(which claims the board, builds, flashes, then launches `tests/e2e/run_e2e.py`).
+`run_e2e.py` opens the serial port, prints every line live (the serial terminal
+monitor), and runs one test per feature.
+
+Each test file is `tests/e2e/test_<feature>.py` and defines one or more
+functions named `test_*(ctx)`. They are auto-discovered and run in order.
+`ctx.expect(regex, timeout=…)` blocks until a serial line matching `regex`
+appears, returns it, and raises `AssertionError` on timeout (a FAIL). The
+firmware must emit stable, machine-readable markers — see the contract table in
+`tests/e2e/README.md` (e.g. `[NW] BOOT_OK`, `[PEDOMETER] Total steps: <n>`).
+
+```python
+# tests/e2e/test_ble.py
+def test_ble_advertises(ctx):
+    ctx.expect(r"\[BLE\] advertising", timeout=15)
+```
+
+Rules:
+
+- One file per feature, so the suite reads as a checklist of on-device checks.
+- Assert on **real output**, never on timing alone.
+- Cover edge cases: a failing sensor, a saturated 65535 counter, a rejected
+  input — assert the firmware *reports* the condition rather than hanging.
+  `tests/e2e/test_boot.py::test_boot_reports_definitive_state` is the template:
+  it only fails if the device says nothing at all (i.e. is stuck).
+- Keep `timeout` short (≤15s); waiting longer usually means the marker is missing.
+
+Run it (after building) without re-flashing with
+`./scripts/flash-verify.sh --no-flash` — but reset the board first, since the
+boot sentinel only appears after a reset.
+
 ## Hardware in the loop — board availability & conflict avoidance
 
 The Nano RP2040 Connect is physically connected to this PC over USB, so the
-firmware can be flashed and exercised on real hardware here:
+firmware can be flashed and exercised on real hardware here. The one-shot path
+claims the board, builds, flashes, and runs the per-feature e2e suite:
+
+```bash
+./scripts/flash-verify.sh                # claim -> build -> flash -> tests/e2e
+./scripts/flash-verify.sh --no-flash     # re-run tests on current firmware
+```
+
+Manual equivalents (only do these while you hold the lock):
 
 ```bash
 pio run -e nanorp2040connect -t upload   # flash the board
@@ -266,5 +315,7 @@ parallel sessions, or the CLI):
 3. `pio test -e native` — unit + simulated e2e suites pass.
 
 A PR must be green before review. Hardware e2e is intentionally excluded from
-the default runner (no device attached to CI); enable it on a self-hosted
-runner when one is available.
+the default runner (no device attached to CI); run it locally with
+`./scripts/flash-verify.sh`. To move it into CI, register a GitHub self-hosted
+runner on the PC the board is wired to and add a `runs-on: [self-hosted, linux]`
+job that calls `scripts/flash-verify.sh` (which still holds the board lock).
