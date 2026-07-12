@@ -80,8 +80,8 @@ private:
 
     // Embedded Functions register map
     static constexpr uint8_t FUNC_CFG_ACCESS      = 0x01;
-    static constexpr uint8_t EMB_FUNC_EN_A        = 0x04;
-    static constexpr uint8_t PEDO_CMD_REG         = 0x83;
+    static constexpr uint8_t EMB_FUNC_EN_A        = 0x03; // PEDO_EN bit (0x08) lives here
+    static constexpr uint8_t PEDO_CMD_REG         = 0x0F; // PEDO_RST_STEP bit (0x04) lives here
     static constexpr uint8_t INT1_CTRL            = 0x0D;
     static constexpr uint8_t EMB_FUNC_INT1        = 0x0A;
 
