@@ -20,5 +20,6 @@ void test_mock_reset_callback_invoked(void);
 void test_derive_cadence_zero_interval(void);
 void test_derive_cadence_basic(void);
 void test_derive_cadence_zero_delta(void);
+void test_mock_notify_gait_records_snapshot(void);
 
 #endif // NANOWEAR_TEST_BLE_H

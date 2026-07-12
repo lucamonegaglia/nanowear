@@ -13,6 +13,16 @@ bool HardwareIMU::writeRegister(uint8_t reg, uint8_t val) {
     return Wire.endTransmission() == 0;
 }
 
+// Read a single byte from a low-level IMU register over Wire. Returns 0 when
+// the slave NACKs (defensive; the caller treats 0 as "no data").
+uint8_t HardwareIMU::readRegister(uint8_t reg) {
+    Wire.beginTransmission(LSM6DSOX_I2C_ADDR);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) return 0;   // repeated-start
+    uint8_t n = Wire.requestFrom(LSM6DSOX_I2C_ADDR, (uint8_t)1);
+    return (n == 1) ? static_cast<uint8_t>(Wire.read()) : 0;
+}
+
 // Open / close the Embedded Functions Configuration register bank. These are
 // the two bank-select writes shared by every register access below.
 bool HardwareIMU::openFuncBank() {
@@ -58,7 +68,15 @@ bool HardwareIMU::begin() {
     // IMU.begin() is the high-level Arduino_LSM6DSOX presence check.
     if (!IMU.begin()) return false;
     // Configure the embedded pedometer engine (resets the hardware count to 0).
-    return initHardwarePedometer();
+    bool ok = initHardwarePedometer();
+    // ALSO stream the raw 6-axis FIFO for running-dynamics detection — but only
+    // when that feature is compiled in, so the default (single-core) build
+    // behaves exactly like the validated step-counting firmware (no ODR change
+    // to the pedometer feed).
+#ifdef NANOWEAR_RUNNING_DYNAMICS
+    ok &= initFifo();
+#endif
+    return ok;
 }
 
 void HardwareIMU::resetPedometerSteps() {
@@ -101,4 +119,79 @@ bool HardwareIMU::resetStepCount() {
     ok &= writeRegister(PEDO_CMD_REG, 0x04); // PEDO_RST_STEP: reset count to 0
     ok &= closeFuncBank();
     return ok;
+}
+
+// ---------------------------------------------------------------------------
+// FIFO streaming (running-dynamics source)
+// ---------------------------------------------------------------------------
+
+// Configure the LSM6DSOX FIFO to stream accel + gyro at 1.66 kHz in
+// continuous (streaming) mode. We deliberately use the ODR-derived timestamp
+// in the decoder (not the sensor's own FIFO timestamp) to keep the byte
+// format simple and the host parser trivial.
+bool HardwareIMU::initFifo() {
+    bool ok = true;
+
+    // Accel: ODR 1.66 kHz (1000b), full-scale ±4 g (01b) -> 0x84.
+    ok &= writeRegister(CTRL1_XL, 0x84);
+    // Gyro:  ODR 1.66 kHz (1000b), full-scale ±2000 dps (11b) -> 0x8C.
+    ok &= writeRegister(CTRL2_G,  0x8C);
+
+    // Route accel + gyro into the FIFO with NO decimation (every sample).
+    //   DEC_FIFO_XL[2:0] = 001, DEC_FIFO_GY[5:3] = 001.
+    ok &= writeRegister(FIFO_CTRL3, 0x09);
+
+    // Continuous (streaming) FIFO mode (MODE[2:0] = 110).
+    ok &= writeRegister(FIFO_CTRL5, 0x06);
+
+    // Cache the scale factors + sample period the host decoder needs. These
+    // match the full-scale chosen above.
+    aScale_ = 0.000122f;   // ±4g  -> 0.122 mg/LSB
+    gScale_ = 0.070f;      // ±2000 dps -> 70 mdps/LSB
+    dtMs_   = 1000.f / 1660.f;  // sample period at 1.66 kHz
+    fifoPattern_ = FifoPattern{};  // accel + gyro, no timestamp (12 B/sample)
+
+    if (ok) {
+        Serial.println("LSM6DSOX FIFO configured (accel+gyro @ 1.66 kHz).");
+    } else {
+        Serial.println("Error: LSM6DSOX FIFO configuration failed.");
+    }
+    return ok;
+}
+
+// Drain the FIFO into `out` (up to `cap` bytes). The sensor reports the
+// number of UNREAD 16-bit WORDS in FIFO_STATUS1; our pattern is 6 words
+// (12 bytes) per sample, so we burst-read a whole number of samples.
+bool HardwareIMU::read(uint8_t* out, size_t cap, size_t& filled) {
+    filled = 0;
+
+    // DIFF_FIFO[5:0] = unread 16-bit words.
+    uint8_t diff = readRegister(FIFO_STATUS1) & 0x3F;
+    if (diff == 0) return false;   // empty: not an error
+
+    const uint8_t bps = fifoPattern_.bytesPerSample();   // 12
+    const uint8_t wordsPerSample = bps / 2;                     // 6
+    uint8_t nSamples = diff / wordsPerSample;                  // whole samples
+    if (nSamples == 0) return false;
+
+    size_t bytes = static_cast<size_t>(nSamples) * bps;
+    if (bytes > cap) {                       // trim to the buffer, whole samples
+        bytes = (cap / bps) * bps;
+        nSamples = static_cast<uint8_t>(bytes / bps);
+    }
+    if (nSamples == 0) return false;
+
+    // Burst-read FIFO_DATA_OUT_L (3Eh); the FIFO auto-increments on each
+    // read, so one repeated-start transaction pulls the whole batch.
+    Wire.beginTransmission(LSM6DSOX_I2C_ADDR);
+    Wire.write(FIFO_DATA_OUT_L);
+    if (Wire.endTransmission(false) != 0) return false;   // NACK -> error
+    uint8_t n = Wire.requestFrom(LSM6DSOX_I2C_ADDR, static_cast<uint8_t>(bytes));
+    if (n != bytes) return false;
+
+    for (size_t i = 0; i < bytes; i++) {
+        out[i] = static_cast<uint8_t>(Wire.read());
+    }
+    filled = bytes;
+    return true;
 }

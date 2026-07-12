@@ -2,6 +2,7 @@
 #define NANOWEAR_BLE_PERIPHERAL_ARDUINO_H
 
 #include "ble_peripheral.h"
+#include "running_dynamics_codec.h"   // encodeGaitMetrics
 
 // ---------------------------------------------------------------------------
 // ArduinoBlePeripheral — NINA-W102 BLE driver for the Nano RP2040 Connect
@@ -18,11 +19,15 @@
 //   * NanoWear custom service (vendor UUID, placeholder — register before ship)
 //       - Steps             Notify+Read : uint32 LE cumulative step count
 //       - Control           Write      : 0x01 = request step reset
+//       - Dynamics          Notify+Read : 10-byte running-dynamics snapshot
+//                                        (see running_dynamics_codec.h)
 //
 // The custom Steps characteristic is the authoritative raw-step channel; some
 // phone apps surface RSC cadence but not cumulative steps (see ROADMAP.md §6),
-// so we expose both. The driver derives cadence from the rate of step updates
-// it sees via notifySteps(), keeping the interface simple (total steps only).
+// so we expose both. Dynamics (contact time, strike pattern, oscillation,
+// braking/overstride proxy, ...) cannot live on RSC, so they ride the
+// custom Dynamics characteristic. The driver derives cadence from the rate of
+// step updates it sees via notifySteps(), keeping the interface simple.
 //
 // NOTE: this header pulls in <ArduinoBLE.h>; it is included only by the board
 // build (main.cpp). The native test env excludes ble_peripheral_arduino.cpp,
@@ -33,6 +38,7 @@ public:
     bool begin(const char* deviceName) override;
     bool isConnected() const override;
     void notifySteps(uint32_t totalSteps) override;
+    void notifyGait(const GaitMetrics& m) override;
     void onStepReset(StepResetCallback cb) override;
     void poll() override;
 
