@@ -87,11 +87,10 @@ jobs:
           git config --global user.name "claude-code-bot[bot]"
           git config --global user.email "claude-code-bot@users.noreply.github.com"
 
-          # Prompt given to Claude for each conflicting PR. Keep it explicit:
-          # a merge is ALREADY in progress, preserve BOTH sides' intent by
-          # EDITING the marked files (the harness stages/commits them), and
-          # never run git merge / builds / commit / push itself.
-          RESOLVE_PROMPT='A `git merge origin/main` is already in progress and has left conflict markers (<<<<<<<, =======, >>>>>>>) in the working tree. Edit EVERY file that contains markers to resolve the conflict, preserving the logical intent of BOTH sides: keep all meaningful changes, reconcile overlapping edits sensibly, and never silently drop either branch'"'"'s work. Do NOT run `git merge` (a merge is already in progress), do NOT run build/test toolchains, do NOT commit, and do NOT push. The harness stages and commits your edits. When no files contain conflict markers, stop. If a conflict is genuinely ambiguous or unsafe, leave it marked and stop.'
+          # We resolve conflicts by asking Claude to RETURN the resolved file
+          # content as text (no tool use required), then write it back here.
+          # This is model-agnostic and avoids relying on the model's ability
+          # to drive git / Edit tools in headless mode. See the per-file loop.
 
           MERGED_PR="${{ github.event.pull_request.number || 'manual' }}"
           FAILURES=0
@@ -149,15 +148,63 @@ jobs:
             # `main` is the second line of defense — see PR description.)
             rm -rf .claude CLAUDE.md
 
-            # Let Claude fail (e.g. hit max turns) without aborting the step;
-            # an unfinished resolution is detected and reported just below.
-            claude -p "$RESOLVE_PROMPT" \
-              "${CLAUDE_ARGS[@]}" || true
+            # Resolve each conflicted file by asking Claude to RETURN the
+            # resolved file content as plain text; the script writes it back.
+            # This avoids depending on the model's tool-use ability (which
+            # weaker models often lack in headless -p mode).
+            CONFLICTED="$(git diff --name-only --diff-filter=U)"
+            if [ -z "$CONFLICTED" ]; then
+              echo "::warning::Merge reported conflicts but no unmerged paths found; aborting."
+              git merge --abort || true
+              echo "::endgroup::"
+              continue
+            fi
+            echo "Conflicted files:"; echo "$CONFLICTED"
 
-            # Stage whatever conflicted files were edited. Only previously
-            # unmerged paths are touched, so stripped project config is never
-            # re-added, and a model that forgot `git add` is covered.
-            git diff --name-only --diff-filter=U | xargs -r git add || true
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              echo "Resolving conflict in: $f"
+              PROMPTFILE="$(mktemp)"
+              {
+                echo "You are resolving a git merge conflict in ONE file. The file content below contains git conflict markers of the form <<<<<<< HEAD ... ======= ... >>>>>>> <branch>. Merge both sides, keeping the intent of each. Respond with ONLY the complete resolved file content: no explanation, no markdown, no code fences, and NO conflict markers. Preserve every non-conflicted line exactly."
+                echo
+                echo "===== FILE: $f ====="
+                cat "$f"
+              } > "$PROMPTFILE"
+              OUTFILE="$(mktemp)"
+              # Claude may fail; we verify the result instead of aborting.
+              claude -p "$(cat "$PROMPTFILE")" "${CLAUDE_ARGS[@]}" > "$OUTFILE" 2>/dev/null || true
+              rm -f "$PROMPTFILE"
+              # Strip a single surrounding markdown code fence if present.
+              RESOLVED="$(mktemp)"
+              if head -n1 "$OUTFILE" | grep -q '^```'; then
+                sed '1d;$d' "$OUTFILE" > "$RESOLVED"
+              else
+                cp "$OUTFILE" "$RESOLVED"
+              fi
+              rm -f "$OUTFILE"
+              # Prefer the on-disk file (Claude may have edited it via tools);
+              # otherwise apply Claude's returned text when it is marker-free.
+              if ! grep -qE '^(<<<<<<<|>>>>>>>)' "$f"; then
+                echo "  $f resolved on disk."
+              elif [ -s "$RESOLVED" ] && ! grep -qE '^(<<<<<<<|>>>>>>>)' "$RESOLVED"; then
+                cp "$RESOLVED" "$f"
+                echo "  $f resolved from Claude's reply."
+              else
+                echo "::warning::$f was not resolved (markers remain); keeping original."
+              fi
+              rm -f "$RESOLVED"
+            done <<< "$CONFLICTED"
+
+            # Stage the previously-unmerged files (only those paths).
+            printf '%s\n' "$CONFLICTED" | xargs -r git add || true
+
+            # Diagnostics: show what changed, and surface any leftover markers.
+            git diff --cached --stat
+            if git diff --cached -G '<<<<<<<' --name-only | grep -q .; then
+              echo "::warning::Leftover conflict markers in staged files:"
+              git diff --cached -G '<<<<<<<' --name-only
+            fi
 
             # Any file still in an unmerged state => Claude could not finish.
             UNMERGED="$(git diff --name-only --diff-filter=U)"
