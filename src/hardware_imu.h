@@ -47,8 +47,8 @@ public:
     // proof the embedded pedometer engine is actually enabled on the part).
     bool pedometerEnabled() const { return pedoEnabled_; }
 
-    // Temporary diagnostic: probe candidate FUNC_CFG_ACCESS pages/registers to
-    // discover the real LSM6DSOX pedometer mapping (web docs unavailable here).
+    // Diagnostic: read back the pedometer-enable register (EMB_FUNC_EN_A) and
+    // confirm the PEDO_EN bit (0x08) is set on the part.
     void debugProbe();
 
     // --- Live raw motion (debug / analysis) ---------------------------------
@@ -85,7 +85,11 @@ private:
     // Only invoked under NANOWEAR_RUNNING_DYNAMICS.
     bool initFifo();
 
-    // Open / close the Embedded Functions configuration register bank.
+    // Open / close the Embedded Functions configuration register bank, with the
+    // pedometer registers' page (Page 0) selected. All pedometer accesses
+    // (EMB_FUNC_EN_A, EMB_FUNC_SRC, STEP_COUNTER) live in Page 0 of the
+    // embedded-functions bank; selecting it explicitly means a read can never
+    // land on Page 1 (where PEDO_CMD_REG / PEDO_DEB_STEPS_CONF live).
     bool openFuncBank();
     bool closeFuncBank();
 
@@ -96,19 +100,26 @@ private:
 
     // Embedded Functions register map
     static constexpr uint8_t FUNC_CFG_ACCESS      = 0x01;
-    static constexpr uint8_t EMB_FUNC_EN_A        = 0x04; // PEDO_EN bit (0x08) lives here (probe-confirmed)
-    static constexpr uint8_t PEDO_CMD_REG         = 0x0F; // PEDO_RST_STEP bit (0x04) lives here
+    static constexpr uint8_t PAGE_SEL             = 0x02; // embedded-func page select; 0 = Page 0 (pedometer regs)
+    static constexpr uint8_t EMB_FUNC_EN_A        = 0x04; // PEDO_EN bit (0x08) enables the pedometer
+    static constexpr uint8_t PEDO_CMD_REG         = 0x83; // pedometer config reg (CARRY_COUNT_EN / FP_REJECTION_EN / AD_DET_EN);
+                                                        // lives in Page 1 — left at its sensible defaults, not touched here
+    static constexpr uint8_t EMB_FUNC_SRC         = 0x64; // PEDO_RST_STEP (bit 0) resets the step counter
+    static constexpr uint8_t PEDO_RST_STEP        = 0x01; // write 1 to EMB_FUNC_SRC(0x64) to reset the count
+    static constexpr uint8_t WHO_AM_I             = 0x0F; // LSM6DSOX id = 0x6C (user bank, no func-bank switch)
     static constexpr uint8_t INT1_CTRL            = 0x0D;
-    static constexpr uint8_t EMB_FUNC_INT1        = 0x0A;
+    static constexpr uint8_t EMB_FUNC_INT1        = 0x0A; // INT1 step-detection routing (embedded-func bank, Page 0)
 
-    // Step counter register offsets (Page 0 of Embedded Advanced Registers)
-    static constexpr uint8_t STEP_COUNTER_L       = 0x4B;
-    static constexpr uint8_t STEP_COUNTER_H       = 0x4C;
+    // Step counter register offsets (embedded-functions Page 0, FUNC_CFG_EN = 1).
+    // Per LSM6DSOX DS (DM00571818) §13.42 these are 62h/63h — NOT 4Bh/4Ch
+    // (those are the OIS gyro outputs UI_OUTX_H_G_OIS / UI_OUTY_L_G_OIS, which
+    // is why the old code always read 0 steps: it was reading gyro data).
+    static constexpr uint8_t STEP_COUNTER_L       = 0x62;
+    static constexpr uint8_t STEP_COUNTER_H       = 0x63;
 
     // FUNC_CFG_ACCESS bank-select magic values
-    static constexpr uint8_t FUNC_CFG_BANK        = 0x80; // access embedded func config
-    static constexpr uint8_t ADV_INT_BANK         = 0x40; // access advanced interrupt page
-    static constexpr uint8_t FUNC_CFG_BANK_CLOSE  = 0x00; // return to default page
+    static constexpr uint8_t FUNC_CFG_BANK        = 0x80; // FUNC_CFG_EN=1: access embedded func config
+    static constexpr uint8_t FUNC_CFG_BANK_CLOSE  = 0x00; // return to default (user) page
 
     // --- FIFO register map (user bank; no FUNC_CFG_ACCESS switch) --------
     static constexpr uint8_t CTRL1_XL    = 0x10;  // accel ODR + full-scale

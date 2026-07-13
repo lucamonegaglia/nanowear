@@ -24,9 +24,13 @@ uint8_t HardwareIMU::readRegister(uint8_t reg) {
 }
 
 // Open / close the Embedded Functions Configuration register bank. These are
-// the two bank-select writes shared by every register access below.
+// the two bank-select writes shared by every register access below. openFuncBank
+// also forces PAGE_SEL = 0 (Page 0) so the pedometer registers (STEP_COUNTER,
+// EMB_FUNC_SRC, EMB_FUNC_EN_A) are addressed — never Page 1 (PEDO_CMD_REG & co).
 bool HardwareIMU::openFuncBank() {
-    return writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK);
+    bool ok = writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK);  // FUNC_CFG_EN = 1
+    ok &= writeRegister(PAGE_SEL, 0x00);                       // Page 0 (pedometer regs)
+    return ok;
 }
 bool HardwareIMU::closeFuncBank() {
     return writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK_CLOSE);
@@ -45,8 +49,9 @@ bool HardwareIMU::initHardwarePedometer() {
     //    by setting the PEDO_EN bit.
     ok &= writeRegister(EMB_FUNC_EN_A, 0x08);
 
-    // 3. Reset the step-count baseline to 0 (PEDO_RST_STEP bit).
-    ok &= writeRegister(PEDO_CMD_REG, 0x04);
+    // 3. Reset the step-count baseline to 0 (PEDO_RST_STEP bit in EMB_FUNC_SRC).
+    ok &= writeRegister(EMB_FUNC_SRC, PEDO_RST_STEP);  // pulse the reset
+    ok &= writeRegister(EMB_FUNC_SRC, 0x00);            // clear the pulse
 
     // 4. Leave the embedded-function bank to return to normal register ops.
     ok &= closeFuncBank();
@@ -56,8 +61,10 @@ bool HardwareIMU::initHardwarePedometer() {
     // over serial so a missing enable is caught without a walk.
     debugProbe();
 
-    // 5. Route the pedometer step-detection interrupt natively to INT1.
-    ok &= writeRegister(FUNC_CFG_ACCESS, ADV_INT_BANK);  // advanced interrupt page
+    // 5. Route the pedometer step-detection interrupt natively to INT1. This is
+    //    an embedded-functions-bank register (EMB_FUNC_INT1, Page 0) — NOT the
+    //    advanced-interrupt page — so it is opened with the same func-bank call.
+    ok &= openFuncBank();
     ok &= writeRegister(EMB_FUNC_INT1, 0x08);            // route INT1_STEP_DET detector
     ok &= closeFuncBank();
 
@@ -95,8 +102,26 @@ bool HardwareIMU::readGyroscope(float& x, float& y, float& z) {
 bool HardwareIMU::begin() {
     // IMU.begin() is the high-level Arduino_LSM6DSOX presence check.
     if (!IMU.begin()) return false;
+
+    // Sanity: confirm we are actually talking to an LSM6DSOX (WHO_AM_I == 0x6C).
+    // WHO_AM_I lives in the user bank, so no func-bank switch is needed.
+    uint8_t who = readRegister(WHO_AM_I);
+    Serial.print("[IMU] WHO_AM_I = 0x");
+    Serial.println(who, HEX);
+
     // Configure the embedded pedometer engine (resets the hardware count to 0).
     bool ok = initHardwarePedometer();
+
+    // Immediate post-init step read (should be 0 after the reset). This proves
+    // the step-counter read path works on real hardware — if it returns an I2C
+    // error here, every later poll would also read 0.
+    uint16_t steps0 = 0;
+    if (readStepCount(steps0)) {
+        Serial.print("[PEDOMETER] step count at init = ");
+        Serial.println(steps0);
+    } else {
+        Serial.println("[PEDOMETER] WARNING: initial step read failed (I2C).");
+    }
     // ALSO stream the raw 6-axis FIFO for running-dynamics detection — but only
     // when that feature is compiled in, so the default (single-core) build
     // behaves exactly like the validated step-counting firmware (no ODR change
@@ -108,10 +133,11 @@ bool HardwareIMU::begin() {
 }
 
 void HardwareIMU::resetPedometerSteps() {
-    // Open the embedded-function config bank, pulse the PEDO_RST_STEP bit, and
-    // return to the default register page. Same register dance as init.
+    // Open the embedded-function config bank, pulse PEDO_RST_STEP in
+    // EMB_FUNC_SRC(0x64), and return to the default register page.
     writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK);
-    writeRegister(PEDO_CMD_REG, 0x04);
+    writeRegister(EMB_FUNC_SRC, PEDO_RST_STEP);  // reset count to 0
+    writeRegister(EMB_FUNC_SRC, 0x00);           // clear the pulse
     writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK_CLOSE);
 }
 
@@ -138,13 +164,14 @@ bool HardwareIMU::readStepCount(uint16_t& out) {
     return true;
 }
 
-// Zero the embedded pedometer's step counter (PEDO_RST_STEP bit in PEDO_CMD_REG).
+// Zero the embedded pedometer's step counter (PEDO_RST_STEP bit in EMB_FUNC_SRC).
 // This only clears the count — the pedometer algorithm (PEDO_EN) stays enabled,
 // unlike initHardwarePedometer() which also configures and routes the interrupt.
 bool HardwareIMU::resetStepCount() {
     bool ok = true;
     ok &= openFuncBank();
-    ok &= writeRegister(PEDO_CMD_REG, 0x04); // PEDO_RST_STEP: reset count to 0
+    ok &= writeRegister(EMB_FUNC_SRC, PEDO_RST_STEP); // PEDO_RST_STEP: reset count to 0
+    ok &= writeRegister(EMB_FUNC_SRC, 0x00);         // clear the pulse
     ok &= closeFuncBank();
     return ok;
 }
