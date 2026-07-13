@@ -74,6 +74,12 @@
 //     constraint); the raw FIFO only feeds the running-dynamics proxies.
 // ---------------------------------------------------------------------------
 
+// Raw motion-trace sample period (ms) for the DEBUG ring buffer. 40 ms = 25 Hz,
+// enough to resolve foot-strike transients while keeping the capture window
+// within STEP_LOG_CAPACITY (1024 * 40 ms ≈ 41 s). Lower = higher rate / shorter
+// window. Tune freely.
+constexpr unsigned long RAW_SAMPLE_MS = 40;
+
 // --- Object ownership (mode-independent) ---------------------------------
 static HardwareIMU imu;
 #ifdef NANOWEAR_SOFTWARE_PEDOMETER
@@ -214,6 +220,21 @@ void loop() {
     // and acts on single-character commands (r/d/g/l/c/s/?) without disrupting
     // logging. Handles the user's "extract logs without Bluetooth" dev path.
     debug.pollSerial();
+
+    // Raw motion trace — independent of the pedometer's threshold/debounce.
+    // While LOGGING, sample the live accel + gyro at RAW_SAMPLE_MS and append to
+    // the ring buffer. The step total only changes every 2 s (Pedometer poll),
+    // so it is carried through unchanged between polls. This lets us verify gait
+    // from the raw signal instead of trusting the hardware count.
+    static ElapsedTimer rawTimer(RAW_SAMPLE_MS);
+    if (tracker.state() == TrackerState::LOGGING && rawTimer.hasElapsed(now)) {
+        rawTimer.reset(now);
+        float ax, ay, az, gx, gy, gz;
+        if (imu.readAcceleration(ax, ay, az) && imu.readGyroscope(gx, gy, gz)) {
+            stepLog.record(now, pedometer.getTotal(),
+                           ax, ay, az, gx, gy, gz);
+        }
+    }
 #endif
 
     // Power-optimised, non-blocking poll: act only when LOGGING and the 2s
@@ -255,11 +276,9 @@ void loop() {
         // strapped to an ankle).
         Serial.print("[PEDOMETER] PEDO_EN: ");
         Serial.println(imu.pedometerEnabled() ? "ON" : "OFF");
-        // Persist this reading to the in-RAM ring buffer only on a good read, so
-        // a failed I2C read never injects a duplicate/stale timestamp.
-        if (pedometer.readOk()) {
-            stepLog.record(now, total);
-        }
+        // NOTE: the raw motion trace (accel + gyro) is now recorded by the
+        // high-rate sampler above, not here, so the buffer holds a continuous
+        // signal rather than one sample per 2 s step poll.
 #endif
 
         Serial.print("[PEDOMETER] Total steps: ");

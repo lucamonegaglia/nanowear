@@ -24,9 +24,22 @@ void DebugConsole::cmdDump() {
     Serial.println("[LOG START]");
     for (size_t i = 0; i < log.count(); i++) {
         StepLogEntry e = log.get(i);
+        // CSV: tMillis,total,ax,ay,az,gx,gy,gz  (accel g, gyro deg/s)
         Serial.print(e.tMillis);
         Serial.print(',');
-        Serial.println(e.total);
+        Serial.print(e.total);
+        Serial.print(',');
+        Serial.print(e.ax, 4);
+        Serial.print(',');
+        Serial.print(e.ay, 4);
+        Serial.print(',');
+        Serial.print(e.az, 4);
+        Serial.print(',');
+        Serial.print(e.gx, 2);
+        Serial.print(',');
+        Serial.print(e.gy, 2);
+        Serial.print(',');
+        Serial.println(e.gz, 2);
     }
     Serial.println("[LOG END]");
 }
@@ -72,7 +85,7 @@ void DebugConsole::cmdHelp() {
     Serial.println("  r  reset step counters + log to 0");
     Serial.println("  d  enter DEBUG (pause logging)");
     Serial.println("  g  resume logging");
-    Serial.println("  l  dump in-RAM step log (CSV: <tMillis>,<totalSteps>)");
+    Serial.println("  l  dump in-RAM log (CSV: <tMillis>,<total>,<ax>,<ay>,<az>,<gx>,<gy>,<gz>)");
     Serial.println("  c  clear the log");
     Serial.println("  s  show status");
     Serial.println("  ?  show this help");

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Dump the NanoWear in-RAM step log over USB Serial (debug mode, no BLE).
 
-The firmware keeps a bounded ring buffer of {tMillis, totalSteps} and, in a
-paused DEBUG state, can stream it as CSV over the board's USB-Serial port. This
-script is the "transfer the .csv to the laptop" half of that: it sends the
-debug commands and writes the captured rows to a .csv file on the host.
+The firmware keeps a bounded ring buffer of
+{tMillis, totalSteps, ax, ay, az, gx, gy, gz} and, in a paused DEBUG state, can
+stream it as CSV over the board's USB-Serial port. This script is the "transfer
+the .csv to the laptop" half of that: it sends the debug commands and writes the
+captured rows to a .csv file on the host.
 
 Typical walk-test flow (board already flashed with the debug firmware):
   1. Reset the counters to a clean baseline, then start logging:
@@ -13,14 +14,19 @@ Typical walk-test flow (board already flashed with the debug firmware):
   3. Capture the log to a file:
          python3 scripts/dump_log.py -o steps.csv
      (this enters DEBUG, dumps, and resumes logging automatically)
-  4. Inspect:  head steps.csv   # tMillis,totalSteps
+  4. Inspect:  head steps.csv   # tMillis,total,ax,ay,az,gx,gy,gz
 
 Requires pyserial:
     pip install pyserial
 
-The CSV has no header; column 1 = millis() at the poll, column 2 = cumulative
-step count. Per-poll deltas are recovered on the laptop (e.g. `pandas` /
-`awk`) since the board stores only the cumulative total.
+The CSV has no header. Columns:
+  tMillis  millis() at the sample
+  total    cumulative step count (only changes every 2 s pedometer poll)
+  ax,ay,az live accelerometer (g) — the raw motion signal, independent of the
+           pedometer's internal threshold / debounce logic
+  gx,gy,gz live gyroscope (deg/s)
+Carrying the raw motion lets you verify gait from the signal itself instead of
+trusting the hardware step count.
 """
 
 import argparse
@@ -35,7 +41,7 @@ try:
 except ImportError:
     sys.exit("error: pyserial is required — run: pip install pyserial")
 
-CSV_RE = re.compile(r"^\d+,\d+$")
+CSV_RE = re.compile(r"^\d+,\d+(?:,-?\d+(?:\.\d+)?){6}$")
 SENTINEL_START = "[LOG START]"
 SENTINEL_END = "[LOG END]"
 
@@ -82,7 +88,7 @@ def dump(ser, out):
     send(ser, "d")  # enter DEBUG (pause polling) so the dump is stable
     time.sleep(0.1)
     send(ser, "l")  # dump the in-RAM log
-    lines = read_until(ser, SENTINEL_END)
+    lines = read_until(ser, SENTINEL_END, timeout=30.0)
     if lines and lines[0] == SENTINEL_START:
         lines = lines[1:]
     rows = [ln for ln in lines if CSV_RE.match(ln)]

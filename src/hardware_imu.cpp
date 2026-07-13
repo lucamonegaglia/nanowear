@@ -80,6 +80,18 @@ void HardwareIMU::debugProbe() {
     Serial.println(pedoEnabled_ ? "ON" : "OFF");
 }
 
+bool HardwareIMU::readAcceleration(float& x, float& y, float& z) {
+    // The Arduino_LSM6DSOX library owns the OUT_X/Y/Z_A register reads and the
+    // full-scale scaling (set in IMU.begin()), so reuse it to stay consistent
+    // with the sensor configuration. Returns values in g.
+    return IMU.readAcceleration(x, y, z);
+}
+
+bool HardwareIMU::readGyroscope(float& x, float& y, float& z) {
+    // Same as readAcceleration but for the gyroscope; returns values in deg/s.
+    return IMU.readGyroscope(x, y, z);
+}
+
 bool HardwareIMU::begin() {
     // IMU.begin() is the high-level Arduino_LSM6DSOX presence check.
     if (!IMU.begin()) return false;

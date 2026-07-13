@@ -51,6 +51,14 @@ public:
     // discover the real LSM6DSOX pedometer mapping (web docs unavailable here).
     void debugProbe();
 
+    // --- Live raw motion (debug / analysis) ---------------------------------
+    // Read the latest accelerometer (g) and gyroscope (deg/s) samples directly
+    // from the sensor, bypassing the embedded pedometer's thresholding/debounce.
+    // Used by the DEBUG step-log so the raw motion trace can be inspected
+    // independently of the step count. Returns true on a successful read.
+    bool readAcceleration(float& x, float& y, float& z);
+    bool readGyroscope(float& x, float& y, float& z);
+
     // --- FifoSource (raw burst reader) -----------------------------------
     // Drain the LSM6DSOX FIFO into `out` (up to `cap` bytes). Returns
     // true on a successful drain; `filled` is the byte count (0 if empty).
