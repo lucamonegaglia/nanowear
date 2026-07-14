@@ -276,9 +276,6 @@ void loop() {
         // strapped to an ankle).
         Serial.print("[PEDOMETER] PEDO_EN: ");
         Serial.println(imu.pedometerEnabled() ? "ON" : "OFF");
-        // NOTE: the raw motion trace (accel + gyro) is now recorded by the
-        // high-rate sampler above, not here, so the buffer holds a continuous
-        // signal rather than one sample per 2 s step poll.
 #endif
 
         Serial.print("[PEDOMETER] Total steps: ");

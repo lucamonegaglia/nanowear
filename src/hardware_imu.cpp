@@ -49,6 +49,18 @@ bool HardwareIMU::initHardwarePedometer() {
     //    by setting the PEDO_EN bit.
     ok &= writeRegister(EMB_FUNC_EN_A, 0x08);
 
+    // 2b. Start the pedometer algorithm. PEDO_EN only *enables* the engine; the
+    //     detector/counter algorithm must be initialised by asserting STEP_DET_INIT
+    //     in EMB_FUNC_INIT_A (DS sec 13.44). This is a *request* bit: assert it,
+    //     hold it long enough for the engine to latch the request, then clear it.
+    //     The datasheet notes it "must be set to 0 for correct operation", so it
+    //     must end cleared. A too-short pulse is ignored, and leaving it set
+    //     (stuck at 1) parks the engine in "init requested" so it never counts —
+    //     the classic "PEDO_EN ON, steps stay 0" failure.
+    ok &= writeRegister(EMB_FUNC_INIT_A, STEP_DET_INIT); // request algorithm init
+    for (int i = 0; i < 50; ++i) delay(1);              // ~50 ms hold so the engine latches it
+    ok &= writeRegister(EMB_FUNC_INIT_A, 0x00);          // clear the request (DS: must be 0)
+
     // 3. Reset the step-count baseline to 0 (PEDO_RST_STEP bit in EMB_FUNC_SRC).
     ok &= writeRegister(EMB_FUNC_SRC, PEDO_RST_STEP);  // pulse the reset
     ok &= writeRegister(EMB_FUNC_SRC, 0x00);            // clear the pulse
