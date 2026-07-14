@@ -104,10 +104,10 @@ private:
     static constexpr uint8_t EMB_FUNC_EN_A        = 0x04; // PEDO_EN bit (0x08) enables the pedometer
     static constexpr uint8_t PEDO_CMD_REG         = 0x83; // pedometer config reg (CARRY_COUNT_EN / FP_REJECTION_EN / AD_DET_EN);
                                                         // lives in Page 1 — left at its sensible defaults, not touched here
-    static constexpr uint8_t EMB_FUNC_SRC         = 0x64; // PEDO_RST_STEP (bit 0) resets the step counter
-    static constexpr uint8_t PEDO_RST_STEP        = 0x01; // write 1 to EMB_FUNC_SRC(0x64) to reset the count
-    static constexpr uint8_t EMB_FUNC_INIT_A      = 0x66; // STEP_DET_INIT (bit 1) starts the pedometer algorithm
-    static constexpr uint8_t STEP_DET_INIT        = 0x02; // pulse in EMB_FUNC_INIT_A(0x66) to init the algo
+    static constexpr uint8_t EMB_FUNC_SRC         = 0x64; // PEDO_RST_STEP (bit 7) resets the step counter
+    static constexpr uint8_t PEDO_RST_STEP        = 0x80; // bit 7 of EMB_FUNC_SRC(0x64): reset the step count
+    static constexpr uint8_t EMB_FUNC_INIT_A      = 0x66; // STEP_DET_INIT (bit 3) starts the pedometer algorithm
+    static constexpr uint8_t STEP_DET_INIT        = 0x08; // bit 3 of EMB_FUNC_INIT_A(0x66): pulse to init the algo
     static constexpr uint8_t WHO_AM_I             = 0x0F; // LSM6DSOX id = 0x6C (user bank, no func-bank switch)
     static constexpr uint8_t INT1_CTRL            = 0x0D;
     static constexpr uint8_t EMB_FUNC_INT1        = 0x0A; // INT1 step-detection routing (embedded-func bank, Page 0)
