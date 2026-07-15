@@ -93,6 +93,12 @@ private:
     bool openFuncBank();
     bool closeFuncBank();
 
+    // Write PEDO_DEB_STEPS_CONF (advanced Page 1) via the indirect PAGE mechanism
+    // to set the pedometer debounce threshold (min consistent steps before the
+    // counter increments). Debug build only — lowers it so short on-device
+    // tests trip counting without a full walk.
+    bool configurePedometerDebounce(uint8_t debounceSteps);
+
     static constexpr uint8_t SUBADDR_AUTO_INC = 0x80; // MSB of sub-address = burst read
 
     // LSM6DSOX I2C device address
@@ -122,6 +128,18 @@ private:
     // FUNC_CFG_ACCESS bank-select magic values
     static constexpr uint8_t FUNC_CFG_BANK        = 0x80; // FUNC_CFG_EN=1: access embedded func config
     static constexpr uint8_t FUNC_CFG_BANK_CLOSE  = 0x00; // return to default (user) page
+
+    // Embedded advanced-features Page 1 access (indirect PAGE mechanism, DS §14).
+    // PEDO_DEB_STEPS_CONF / PEDO_CMD_REG live here and are written by pointing
+    // PAGE_ADDRESS at the target and writing PAGE_VALUE while PAGE_WRITE is set.
+    static constexpr uint8_t PAGE_ADDRESS         = 0x08; // PAGE_ADDR[7:0]: target reg in selected page
+    static constexpr uint8_t PAGE_VALUE           = 0x09; // PAGE_VALUE[7:0]: data to write
+    static constexpr uint8_t PAGE_RW              = 0x17; // advanced-page R/W control
+    static constexpr uint8_t PAGE_WRITE_BIT       = 0x40; // bit 6 of PAGE_RW: enable page writes
+    static constexpr uint8_t PAGE_SEL_PAGE1       = 0x01; // PAGE_SEL[3:0]=0001 -> advanced features Page 1
+    static constexpr uint8_t PEDO_DEB_STEPS_CONF_ADDR = 0x84; // PEDO_DEB_STEPS_CONF addr (Page 1)
+    // Debug build only: count after this many consistent steps (default 0x0A=10).
+    static constexpr uint8_t PEDO_DEB_STEPS_DEBUG = 0x02;
 
     // --- FIFO register map (user bank; no FUNC_CFG_ACCESS switch) --------
     static constexpr uint8_t CTRL1_XL    = 0x10;  // accel ODR + full-scale

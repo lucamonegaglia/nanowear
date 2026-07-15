@@ -36,6 +36,23 @@ bool HardwareIMU::closeFuncBank() {
     return writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK_CLOSE);
 }
 
+// Lower the pedometer debounce threshold. PEDO_DEB_STEPS_CONF (0x84) lives in
+// the embedded advanced-features Page 1 and is written through the indirect
+// PAGE mechanism (DS §14), not by writing 0x84 directly:
+//   FUNC_CFG_EN=1 -> PAGE_WRITE=1 -> PAGE_SEL=Page1 -> PAGE_ADDR=0x84 ->
+//   PAGE_VALUE=debounce -> PAGE_WRITE=0 -> FUNC_CFG_EN=0.
+bool HardwareIMU::configurePedometerDebounce(uint8_t debounceSteps) {
+    bool ok = true;
+    ok &= writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK);          // 1. FUNC_CFG_EN = 1
+    ok &= writeRegister(PAGE_RW, PAGE_WRITE_BIT);                // 2. PAGE_WRITE = 1
+    ok &= writeRegister(PAGE_SEL, PAGE_SEL_PAGE1);              // 3. select Page 1
+    ok &= writeRegister(PAGE_ADDRESS, PEDO_DEB_STEPS_CONF_ADDR); // 4. target 0x84
+    ok &= writeRegister(PAGE_VALUE, debounceSteps);             // 5. debounce value
+    ok &= writeRegister(PAGE_RW, 0x00);                         // 6. PAGE_WRITE = 0
+    ok &= writeRegister(FUNC_CFG_ACCESS, FUNC_CFG_BANK_CLOSE);  // 7. FUNC_CFG_EN = 0
+    return ok;
+}
+
 // ---------------------------------------------------------------------------
 // Embedded pedometer configuration
 // ---------------------------------------------------------------------------
@@ -79,6 +96,18 @@ bool HardwareIMU::initHardwarePedometer() {
     ok &= openFuncBank();
     ok &= writeRegister(EMB_FUNC_INT1, 0x08);            // route INT1_STEP_DET detector
     ok &= closeFuncBank();
+
+#if defined(COM_MODE_DEBUG)
+    // Debug build only: lower the pedometer debounce so a short on-device test
+    // (bounce the board a couple of times) trips counting without a full walk.
+    // The production BLE build keeps the default 10-step debounce.
+    if (configurePedometerDebounce(PEDO_DEB_STEPS_DEBUG)) {
+        Serial.print("[PEDOMETER] debounce set to ");
+        Serial.println(PEDO_DEB_STEPS_DEBUG);
+    } else {
+        Serial.println("[PEDOMETER] Warning: debounce config failed (I2C).");
+    }
+#endif
 
     if (ok) {
         Serial.println("LSM6DSOX Embedded Pedometer Engine Configured.");
