@@ -51,6 +51,12 @@ public:
     // confirm the PEDO_EN bit (0x08) is set on the part.
     void debugProbe();
 
+    // Debug: read the STEP_DETECTED status bit (EMB_FUNC_SRC bit 6) so the
+    // DEBUG build can confirm whether the pedometer detector is actually
+    // firing on motion. Distinguishes "detector not detecting" from "counter
+    // not incrementing". Does not disturb the step count.
+    bool stepDetected();
+
     // --- Live raw motion (debug / analysis) ---------------------------------
     // Read the latest accelerometer (g) and gyroscope (deg/s) samples directly
     // from the sensor, bypassing the embedded pedometer's thresholding/debounce.

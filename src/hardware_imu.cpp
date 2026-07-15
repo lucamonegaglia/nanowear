@@ -68,15 +68,19 @@ bool HardwareIMU::initHardwarePedometer() {
 
     // 2b. Start the pedometer algorithm. PEDO_EN only *enables* the engine; the
     //     detector/counter algorithm must be initialised by asserting STEP_DET_INIT
-    //     in EMB_FUNC_INIT_A (DS sec 13.44). This is a *request* bit: assert it,
-    //     hold it long enough for the engine to latch the request, then clear it.
-    //     The datasheet notes it "must be set to 0 for correct operation", so it
-    //     must end cleared. A too-short pulse is ignored, and leaving it set
-    //     (stuck at 1) parks the engine in "init requested" so it never counts —
-    //     the classic "PEDO_EN ON, steps stay 0" failure.
+    //     in EMB_FUNC_INIT_A (DS sec 13.44). This is a *request* bit: asserting it
+    //     asks the device to (re)initialise, and the device CLEARS the bit itself
+    //     once initialisation completes. Poll for that auto-clear rather than a
+    //     fixed delay — forcing the bit back to 0 too early aborts the init and
+    //     parks the engine in "init requested" so it never counts, the classic
+    //     "PEDO_EN ON, steps stay 0" failure. DS notes the bit "must be set to 0
+    //     for correct operation", so we leave it cleared.
     ok &= writeRegister(EMB_FUNC_INIT_A, STEP_DET_INIT); // request algorithm init
-    for (int i = 0; i < 50; ++i) delay(1);              // ~50 ms hold so the engine latches it
-    ok &= writeRegister(EMB_FUNC_INIT_A, 0x00);          // clear the request (DS: must be 0)
+    for (int i = 0; i < 100; ++i) {                     // up to ~1 s for init to finish
+        delay(10);
+        if ((readRegister(EMB_FUNC_INIT_A) & STEP_DET_INIT) == 0) break;
+    }
+    ok &= writeRegister(EMB_FUNC_INIT_A, 0x00);          // ensure the request bit is cleared
 
     // 3. Reset the step-count baseline to 0 (PEDO_RST_STEP bit in EMB_FUNC_SRC).
     ok &= writeRegister(EMB_FUNC_SRC, PEDO_RST_STEP);  // pulse the reset
@@ -126,6 +130,16 @@ void HardwareIMU::debugProbe() {
     pedoEnabled_ = (en & 0x08) != 0;
     Serial.print("[PEDOMETER] PEDO_EN: ");
     Serial.println(pedoEnabled_ ? "ON" : "OFF");
+}
+
+bool HardwareIMU::stepDetected() {
+    // STEP_DETECTED is bit 6 of EMB_FUNC_SRC (0x64). Read it inside the func
+    // bank so the register is visible; this is a status bit and does not
+    // disturb the step counter.
+    openFuncBank();
+    uint8_t src = readRegister(EMB_FUNC_SRC);
+    closeFuncBank();
+    return (src & 0x40) != 0;  // bit 6 = STEP_DETECTED
 }
 
 bool HardwareIMU::readAcceleration(float& x, float& y, float& z) {

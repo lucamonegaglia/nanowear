@@ -276,6 +276,11 @@ void loop() {
         // strapped to an ankle).
         Serial.print("[PEDOMETER] PEDO_EN: ");
         Serial.println(imu.pedometerEnabled() ? "ON" : "OFF");
+        // Diagnostic: is the detector actually firing on motion? det=1 means the
+        // part sees steps but the counter isn't incrementing; det=0 means the
+        // detector isn't recognising the motion (or init didn't complete).
+        Serial.print("[PED] det=");
+        Serial.println(imu.stepDetected() ? "1" : "0");
 #endif
 
         Serial.print("[PEDOMETER] Total steps: ");
