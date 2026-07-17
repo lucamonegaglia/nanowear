@@ -121,6 +121,29 @@ memory shared by every agent that works on that task. Rules:
   and must not land in a PR. Add `context_summary.md` (and `**/context_summary.md`)
   to `.gitignore` so it is never staged or pushed.
 
+### Main session as orchestrator — delegate aggressively
+
+The main (user-facing) session's **context window is the scarcest, most
+protected resource**. Token spend and wall-clock time are *not* constraints —
+only context is. Operate accordingly:
+
+- **The main agent is a manager, not a doer.** Its job is to plan, assign,
+  integrate, and verify — not to read every file or write every line itself.
+- **Retrieve via subagents.** Use the Agent tool for broad searches, log trawls,
+  and reading many files; keep only the conclusion in the main context, not the
+  raw dumps. Prefer an Explore / general-purpose agent over doing the sweep
+  inline.
+- **Implement and test via subagents / workflows.** Delegate code
+  implementation and test execution to subagents, and for large multi-step work
+  use the Workflow tool, so the main context stays lean. The main agent
+  integrates the returned result rather than doing the work in-window.
+- **Protect context over saving tokens or time.** When in doubt, spawn an agent
+  rather than pulling more material into the main window.
+
+This pairs with `context_summary.md`: agents that run a task write verified
+findings there so the orchestrator and later agents start warm without
+re-deriving everything.
+
 ## Agent operating rules (hard requirements)
 
 ### Open PRs only through `/open-pr` — never `gh pr create` directly
