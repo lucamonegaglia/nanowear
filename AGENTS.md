@@ -102,6 +102,25 @@ claim the board before touching it, keep hardware behind the `IMUSensor`
 interface, and small reviewable PRs. Full list in *Agentic development
 practices* (CONTRIBUTING.md).
 
+### Per-branch context summary (`context_summary.md`)
+
+The context window is small and agents run sequentially on the same task, so
+each branch / worktree keeps a **`context_summary.md`** at its root as a running
+memory shared by every agent that works on that task. Rules:
+
+- **Write only what is verified and load-bearing for this task/feature.** No
+  speculation, no unverified guesses, no raw log dumps. Capture findings a
+  future agent can act on without re-deriving them.
+- **Evict or correct stale info.** If something previously written turns out to
+  be wrong, inaccurate, misleading, or no longer relevant, edit it out or fix
+  it — the file is a living summary, not an append-only log.
+- **Read it first, update it last.** At the start of a session read
+  `context_summary.md` (if present) before exploring; before finishing, write
+  back any new verified facts so the next agent starts warm.
+- **Never commits to the main repo.** This file is local to the branch/worktree
+  and must not land in a PR. Add `context_summary.md` (and `**/context_summary.md`)
+  to `.gitignore` so it is never staged or pushed.
+
 ## Agent operating rules (hard requirements)
 
 ### Open PRs only through `/open-pr` — never `gh pr create` directly
