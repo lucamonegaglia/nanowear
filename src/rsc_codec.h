@@ -33,12 +33,13 @@ inline uint8_t rscFlags(bool stridePresent, bool distancePresent,
 }
 
 // Convert a cadence in steps/minute to the RSC Measurement cadence field.
-// Per the SIG spec the field unit is 0.5 steps/second, so the encoded value is
-// spm / 30 (spm/60 steps-per-sec * 2 half-steps-per-sec). e.g. 180 spm -> 6.
-// Clamped to 255 so an out-of-range input can't wrap the uint8 field.
+// Per the Bluetooth SIG RSC Measurement (0x2A53) the Instantaneous Cadence
+// field is a uint8 in steps-per-minute (unit 1/minute, resolution 1) — there is
+// NO sub-scaling, so the value is written as-is. e.g. 180 spm -> 180. (The
+// fractional scaling belongs to the Instantaneous Speed field, m/s * 256, not
+// to cadence.) Clamped to 255 so an out-of-range input can't wrap the uint8.
 inline uint8_t cadenceToRscUnits(uint16_t stepsPerMinute) {
-    uint16_t units = stepsPerMinute / 30;
-    return static_cast<uint8_t>(units > 255 ? 255 : units);
+    return static_cast<uint8_t>(stepsPerMinute > 255 ? 255 : stepsPerMinute);
 }
 
 // Derive cadence (steps/minute) from the step delta over a time interval.
@@ -66,7 +67,7 @@ inline uint8_t encodeRscMeasurement(uint8_t* out, uint8_t flags,
     out[0] = flags;       // Flags
     out[1] = 0;           // Instantaneous Speed (uint16, m/s * 256) low  -> 0
     out[2] = 0;           // Instantaneous Speed high                     -> 0
-    out[3] = cadenceUnits; // Instantaneous Cadence (0.5 steps/sec)
+    out[3] = cadenceUnits; // Instantaneous Cadence (steps/minute)
     return 4;
 }
 

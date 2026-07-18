@@ -26,23 +26,24 @@ void test_rsc_flags_combo(void) {
 
 // --- rsc_codec: cadence scaling ---------------------------------------------
 void test_cadence_to_rsc_units(void) {
-    // spm/30 : 180 spm -> 6, 90 -> 3, 0 -> 0
-    TEST_ASSERT_EQUAL_UINT8(6, cadenceToRscUnits(180));
-    TEST_ASSERT_EQUAL_UINT8(3, cadenceToRscUnits(90));
-    TEST_ASSERT_EQUAL_UINT8(0, cadenceToRscUnits(0));
-    // truncation is acceptable for the coarse field
-    TEST_ASSERT_EQUAL_UINT8(5, cadenceToRscUnits(160));
+    // SIG cadence unit is steps/minute, resolution 1 -> value written as-is.
+    TEST_ASSERT_EQUAL_UINT8(180, cadenceToRscUnits(180));
+    TEST_ASSERT_EQUAL_UINT8(90,  cadenceToRscUnits(90));
+    TEST_ASSERT_EQUAL_UINT8(0,   cadenceToRscUnits(0));
+    TEST_ASSERT_EQUAL_UINT8(160, cadenceToRscUnits(160));
+    // clamp: anything above the uint8 range saturates at 255 (no wrap)
+    TEST_ASSERT_EQUAL_UINT8(255, cadenceToRscUnits(300));
 }
 
 // --- rsc_codec: measurement payload -----------------------------------------
 void test_encode_rsc_measurement(void) {
     uint8_t buf[4];
-    uint8_t n = encodeRscMeasurement(buf, 0x00, 6);
+    uint8_t n = encodeRscMeasurement(buf, 0x00, 180);
     TEST_ASSERT_EQUAL_UINT8(4, n);          // flags + speed(2) + cadence(1)
     TEST_ASSERT_EQUAL_UINT8(0x00, buf[0]);  // flags
     TEST_ASSERT_EQUAL_UINT8(0x00, buf[1]);  // speed low  (0 = unavailable)
     TEST_ASSERT_EQUAL_UINT8(0x00, buf[2]);  // speed high
-    TEST_ASSERT_EQUAL_UINT8(6,    buf[3]);  // cadence units (180 spm)
+    TEST_ASSERT_EQUAL_UINT8(180,  buf[3]);  // cadence (steps/min, as-is)
 }
 
 // --- rsc_codec: step count (custom characteristic) --------------------------
