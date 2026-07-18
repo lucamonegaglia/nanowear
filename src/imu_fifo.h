@@ -29,6 +29,23 @@ struct ImuSample {
     uint32_t ts = 0;                    // timestamp, ms
 };
 
+// ---------------------------------------------------------------------------
+// SampleConsumer — a sink for decoded IMU samples
+// ---------------------------------------------------------------------------
+// The unified FIFO sampler (see main.cpp) reads the LSM6DSOX FIFO once and
+// dispatches every decoded sample to all registered consumers, so a single I2C
+// burst fans out to every downstream algorithm (the software step detector, the
+// gait detector, ...) without contending the bus from multiple readers.
+//
+// Implement onSample() to receive each sample in stream order. The interface is
+// deliberately tiny and free of I2C/millis(), so consumers stay host-testable.
+// ---------------------------------------------------------------------------
+class SampleConsumer {
+public:
+    virtual ~SampleConsumer() = default;
+    virtual void onSample(const ImuSample& s) = 0;
+};
+
 // Describes what is packed into each FIFO sample so the parser stays generic.
 // For Tier A we enable accel + gyro with no embedded timestamp: that is a
 // fixed 12-byte pattern (3 axes * 2 bytes * 2 sensors). Add fields here

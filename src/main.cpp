@@ -3,6 +3,7 @@
 #include "pedometer.h"
 #include "state_machine.h"
 #include "step_source.h"
+#include "step_detector.h"   // software step detector (active source)
 
 // Communication mode is chosen at build time via the COM_MODE macro (see
 // platformio.ini). Exactly one of COM_MODE_BLE / COM_MODE_DEBUG is defined; the
@@ -76,13 +77,45 @@
 
 // --- Object ownership (mode-independent) ---------------------------------
 static HardwareIMU imu;
-#ifdef NANOWEAR_SOFTWARE_PEDOMETER
-static SoftwareStepSource stepSrc;        // count detector strides
+
+// Active step source. Default: the software accel-based detector (replaces the
+// embedded MLC pedometer, which proved unreliable on hardware). The legacy MLC
+// source is selectable via NANOWEAR_MLC_PEDOMETER for a future revisit.
+#ifdef NANOWEAR_MLC_PEDOMETER
+static HardwareStepSource stepSrc(imu);
 #else
-static HardwareStepSource stepSrc(imu);  // MLC pedometer (active)
+static SoftwareStepDetector stepSrc;       // also a SampleConsumer
 #endif
 static Pedometer pedometer(stepSrc);
 static StateMachine tracker(2000);     // poll the step source every 2s
+
+// --- Unified FIFO sampler: one read, many consumers ---------------------
+// The LSM6DSOX FIFO is drained here and every decoded sample is dispatched to
+// all registered SampleConsumers (the software step detector always; the gait
+// detector under running dynamics). A single I2C burst therefore feeds every
+// downstream algorithm without contending the bus from two readers.
+static constexpr int kMaxConsumers = 4;
+static SampleConsumer* g_consumers[kMaxConsumers] = {nullptr};
+static int g_nConsumers = 0;
+
+static void addConsumer(SampleConsumer* c) {
+    if (c && g_nConsumers < kMaxConsumers) g_consumers[g_nConsumers++] = c;
+}
+
+static void drainFifo(uint8_t* fifoBuf, ImuSample* samples, float& tsBase) {
+    size_t filled = 0;
+    while (imu.read(fifoBuf, 768, filled) && filled > 0) {
+        size_t n = decodeFifo(fifoBuf, filled,
+                              imu.fifoPattern(), imu.accelScale(),
+                              imu.gyroScale(), imu.samplePeriodMs(),
+                              tsBase, samples, 64);
+        for (size_t i = 0; i < n; i++) {
+            for (int c = 0; c < g_nConsumers; c++) {
+                if (g_consumers[c]) g_consumers[c]->onSample(samples[i]);
+            }
+        }
+    }
+}
 
 #if defined(COM_MODE_BLE)
 static ArduinoBlePeripheral ble;       // phone link (NINA BLE, RSC + custom)
@@ -104,6 +137,17 @@ static DebugConsole debug(stepLog, pedometer, tracker, imu);
 // --- Core1-only objects (I2C + detection) -------------------------------
 static GaitDetector detector(1660.f);  // 1.66 kHz FIFO ODR
 static ElapsedTimer fifoTimer(15);      // Core1 FIFO-drain cadence
+
+// Adapter: feed the GaitDetector from the unified sampler's SampleConsumer
+// stream instead of calling detector.process() inline in loop1().
+class GaitConsumer : public SampleConsumer {
+public:
+    explicit GaitConsumer(GaitDetector& g) : g(g) {}
+    void onSample(const ImuSample& s) override { g.process(s); }
+private:
+    GaitDetector& g;
+};
+static GaitConsumer gaitConsumer(detector);
 
 // --- Shared snapshot (written by Core1, read by Core0) ------------------
 // Guarded by a single spinlock so a 32-bit-stable struct never tears.
@@ -127,7 +171,7 @@ void handleStepReset() {
 // Reset handler invoked by the phone over BLE (single core owns I2C directly).
 // Also compiled for DEBUG mode (no phone link, so it never fires there).
 void handleStepReset() {
-    imu.resetStepCount();
+    stepSrc.reset();
     pedometer.reset();
     Serial.println("[BLE] Step reset requested by phone");
 }
@@ -138,6 +182,15 @@ void handleStepReset() {
 // ---------------------------------------------------------------------------
 void setup() {
     Serial.begin(115200);
+
+    // Register FIFO consumers for the unified sampler (step detector always;
+    // gait detector only under running dynamics).
+#ifndef NANOWEAR_MLC_PEDOMETER
+    addConsumer(&stepSrc);   // SoftwareStepDetector is a SampleConsumer
+#endif
+#ifdef NANOWEAR_RUNNING_DYNAMICS
+    addConsumer(&gaitConsumer);
+#endif
 
 #ifdef NANOWEAR_RUNNING_DYNAMICS
     // Spinlock for the cross-core snapshot (init before any Core1 use). Claim an
@@ -155,8 +208,8 @@ void setup() {
         return;
     }
 
-    // BOOT -> LOGGING. pedometer.reset() pairs with the PEDO_RST_STEP command
-    // issued inside imu.begin(), zeroing the firmware accumulator to match.
+    // BOOT -> LOGGING. pedometer.reset() zeroes the firmware accumulator to
+    // match the (software) detector's zero baseline.
     pedometer.reset();
     tracker.startLogging(millis());
     Serial.println("[STATE] BOOT complete -> LOGGING");
@@ -208,6 +261,18 @@ void loop() {
 #else
     // Throttle for the "not logging" diagnostic so it doesn't flood Serial.
     static unsigned long lastStateDiagMs = 0;
+
+    // Single-core build: Core0 owns the IMU, so drain the FIFO here and feed
+    // the software step detector (the only consumer in this build). Skipped
+    // when no consumers are registered (e.g. MLC source without dynamics).
+    static uint8_t  fifoBuf[768];
+    static ImuSample samples[64];
+    static float     tsBase = 0;
+    static ElapsedTimer fifoTimer(15);
+    if (g_nConsumers > 0 && fifoTimer.hasElapsed(now)) {
+        fifoTimer.reset(now);
+        drainFifo(fifoBuf, samples, tsBase);
+    }
 
 #if defined(COM_MODE_DEBUG)
     // Debug command channel (USB Serial). Non-blocking: reads any pending byte
@@ -267,6 +332,15 @@ void loop() {
         if (!pedometer.readOk()) {
             Serial.println("[PEDOMETER] Warning: step-count read failed (I2C error).");
         }
+
+        // Software-detector diagnostic (active source). Cadence is reported only
+        // for the software detector (the optional MLC source has none).
+        Serial.print("[STEPDETECT] steps: ");
+        Serial.println(total);
+#ifndef NANOWEAR_MLC_PEDOMETER
+        Serial.print("[STEPDETECT] cadence: ");
+        Serial.println(stepSrc.getCadenceSpm());
+#endif
 
 #if defined(COM_MODE_BLE)
         // Push the latest total to any connected phone (Notify + custom char).
@@ -335,26 +409,18 @@ void loop1() {
     if (fifoTimer.hasElapsed(now)) {
         fifoTimer.reset(now);
 
-        // FIFO_STATUS1 DIFF_FIFO is 6-bit (max ~10 samples/read at 1.66 kHz),
-        // so a single read per tick would overflow the 3 KB buffer and drop
-        // samples. Drain in a loop until empty; tsBase chains across reads.
-        size_t filled = 0;
-        while (imu.read(fifoBuf, sizeof(fifoBuf), filled) && filled > 0) {
-            size_t n = decodeFifo(fifoBuf, filled,
-                                   imu.fifoPattern(), imu.accelScale(),
-                                   imu.gyroScale(), imu.samplePeriodMs(),
-                                   tsBase, samples, 64);
-            for (size_t i = 0; i < n; i++) {
-                if (detector.process(samples[i])) {
-                    // A stride completed: publish the snapshot + step (if software).
-#ifdef NANOWEAR_SOFTWARE_PEDOMETER
-                    stepSrc.onStride();
-#endif
-                    uint32_t save = spin_lock_blocking(g_lock);
-                    g_latestGait = detector.metrics();
-                    g_gaitNew    = true;
-                    spin_unlock(g_lock, save);
-                }
+        // Unified sampler: one FIFO drain feeds every registered consumer (the
+        // software step detector and, under running dynamics, the gait detector
+        // via GaitConsumer). Skipped when nothing consumes the stream (e.g. MLC
+        // source without running dynamics).
+        if (g_nConsumers > 0) {
+            drainFifo(fifoBuf, samples, tsBase);
+            if (detector.hasNewMetrics()) {
+                uint32_t save = spin_lock_blocking(g_lock);
+                g_latestGait = detector.metrics();
+                g_gaitNew    = true;
+                spin_unlock(g_lock, save);
+                detector.clearNewMetrics();
             }
         }
 
@@ -382,6 +448,15 @@ void loop1() {
             if (!pedometer.readOk()) {
                 Serial.println("[PEDOMETER] Warning: step-count read failed (I2C error).");
             }
+
+            // Software-detector diagnostic (active source).
+            Serial.print("[STEPDETECT] steps: ");
+            Serial.println(total);
+#ifndef NANOWEAR_MLC_PEDOMETER
+            Serial.print("[STEPDETECT] cadence: ");
+            Serial.println(stepSrc.getCadenceSpm());
+#endif
+
             // Persist to the in-RAM step log (owned by Core1) for the debug
             // dump; then publish the total to Core0's snapshot for BLE notify.
             if (pedometer.readOk()) stepLog.record(now, total);
@@ -397,7 +472,7 @@ void loop1() {
         if (g_resetReq) { doReset = true; g_resetReq = false; }
         spin_unlock(g_lock, save);
         if (doReset) {
-            imu.resetStepCount();
+            stepSrc.reset();
             pedometer.reset();
             Serial.println("[PEDOMETER] Reset performed (Core1).");
         }

@@ -67,15 +67,20 @@ bool HardwareIMU::initHardwarePedometer() {
 bool HardwareIMU::begin() {
     // IMU.begin() is the high-level Arduino_LSM6DSOX presence check.
     if (!IMU.begin()) return false;
-    // Configure the embedded pedometer engine (resets the hardware count to 0).
-    bool ok = initHardwarePedometer();
-    // ALSO stream the raw 6-axis FIFO for running-dynamics detection — but only
-    // when that feature is compiled in, so the default (single-core) build
-    // behaves exactly like the validated step-counting firmware (no ODR change
-    // to the pedometer feed).
-#ifdef NANOWEAR_RUNNING_DYNAMICS
-    ok &= initFifo();
+
+    bool ok = true;
+    // The embedded (MLC) pedometer is an OPTIONAL legacy source, selected via
+    // NANOWEAR_MLC_PEDOMETER. It proved unreliable on hardware, so the default
+    // firmware uses the software detector fed by the FIFO stream instead.
+#ifdef NANOWEAR_MLC_PEDOMETER
+    ok &= initHardwarePedometer();
 #endif
+
+    // ALWAYS stream the raw 6-axis FIFO (accel + gyro @ 1.66 kHz). The software
+    // step detector (the default source) needs this stream, and the opt-in
+    // running-dynamics gait detector consumes it too. A single FIFO read fans
+    // out to every consumer via the SampleConsumer seam in main.cpp.
+    ok &= initFifo();
     return ok;
 }
 
