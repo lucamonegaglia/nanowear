@@ -11,11 +11,13 @@
 // interface, which lets the step-counting logic be unit-tested on the host
 // (native env) using a fake implementation instead of real I2C hardware.
 //
-// NOTE: the class is deliberately named IMUSensor (not IMU) to avoid colliding
-// with the `IMU` macro that Arduino_LSM6DSOX.h #defines to its global object
-// (`#define IMU IMU_LSM6DSOX`). That macro would otherwise rewrite every
-// `class IMU` / `IMU&` token in the board build into `IMU_LSM6DSOX`, breaking
-// compilation. The name also keeps the test double MockIMU unambiguous.
+// NOTE: the class is deliberately named IMUSensor (not IMU). Historically this
+// avoided colliding with the `IMU` macro that Arduino_LSM6DSOX.h #defined to its
+// global object (`#define IMU IMU_LSM6DSOX`), which would have rewritten every
+// `class IMU` / `IMU&` token in the board build into `IMU_LSM6DSOX` and broken
+// compilation. The board build now drives the sensor through ST's standard-C
+// LSM6DSOX driver (lib/lsm6dsox, no such macro), but the IMUSensor name is kept
+// — it reads clearly and keeps the test double MockIMU unambiguous.
 //
 // The interface is deliberately minimal: initialise the sensor and read the
 // cumulative step count. The underlying transport can fail (e.g. a noisy I2C
