@@ -15,8 +15,9 @@ static int32_t stm_platform_write(void* handle, uint8_t reg,
     Wire.beginTransmission(HardwareIMU::LSM6DSOX_I2C_ADDR);
     Wire.write(reg);
     Wire.write(bufp, len);
-    Wire.endTransmission();
-    return 0;
+    // Non-zero = NACK / arbitration loss: the ST driver propagates this as an
+    // error, so a failed config write is not silently swallowed.
+    return static_cast<int32_t>(Wire.endTransmission());
 }
 
 static int32_t stm_platform_read(void* handle, uint8_t reg,
@@ -25,8 +26,12 @@ static int32_t stm_platform_read(void* handle, uint8_t reg,
     Wire.beginTransmission(HardwareIMU::LSM6DSOX_I2C_ADDR);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) return -1;   // repeated-start
-    Wire.requestFrom((uint8_t)HardwareIMU::LSM6DSOX_I2C_ADDR, (uint8_t)len,
-                     (uint8_t)true);
+    // A short read (fewer bytes than requested) means a flaky bus: report it as
+    // a transport error rather than assembling garbage from Wire.read()==-1.
+    if (Wire.requestFrom((uint8_t)HardwareIMU::LSM6DSOX_I2C_ADDR, (uint8_t)len,
+                         (uint8_t)true) != len) {
+        return -1;
+    }
     for (uint16_t i = 0; i < len; i++) {
         bufp[i] = static_cast<uint8_t>(Wire.read());
     }
@@ -97,12 +102,17 @@ bool HardwareIMU::initHardwarePedometer() {
     }
 
     // Restore default configuration, then disable I3C (this board is I2C-only).
+    // Bound the wait so a stuck bus cannot hang begin() forever.
     uint8_t rst = 1;
     lsm6dsox_reset_set(&dev_ctx_, PROPERTY_ENABLE);
-    do {
+    for (int i = 0; i < 100 && rst; i++) {
         lsm6dsox_reset_get(&dev_ctx_, &rst);
         delay(1);
-    } while (rst);
+    }
+    if (rst) {
+        Serial.println("Error: LSM6DSOX reset did not complete.");
+        return false;
+    }
 
     lsm6dsox_i3c_disable_set(&dev_ctx_, LSM6DSOX_I3C_DISABLE);
     lsm6dsox_block_data_update_set(&dev_ctx_, PROPERTY_ENABLE);
@@ -111,21 +121,23 @@ bool HardwareIMU::initHardwarePedometer() {
     lsm6dsox_xl_full_scale_set(&dev_ctx_, LSM6DSOX_4g);
     lsm6dsox_gy_full_scale_set(&dev_ctx_, LSM6DSOX_2000dps);
 
-    // Enable the embedded pedometer (advanced false-step-rejection mode) and the
-    // embedded-sensor block that hosts it.
+    // Enable the embedded pedometer (advanced false-step-rejection mode).
     lsm6dsox_pedo_sens_set(&dev_ctx_, LSM6DSOX_FALSE_STEP_REJ_ADV_MODE);
+    // Enable the pedometer ("step") embedded function. The MLC (machine-learning
+    // core) is a separate feature and is intentionally left disabled (KISS).
     lsm6dsox_emb_sens_t emb_sens;
     emb_sens.step = PROPERTY_ENABLE;
-    emb_sens.mlc  = PROPERTY_ENABLE;
     lsm6dsox_embedded_sens_set(&dev_ctx_, &emb_sens);
 
-    // Route the step detector onto INT1 (polled below; no ISR is used).
+    // Route the step detector onto INT1. The firmware reads the step COUNT
+    // directly via lsm6dsox_number_of_steps_get (polling), not via the INT1
+    // line, so this routing only mirrors the vendor example / original firmware;
+    // no ISR is attached. Notification is base (pulsed) + embedded (latched).
     lsm6dsox_pin_int1_route_t pin_int1_route;
     lsm6dsox_pin_int1_route_get(&dev_ctx_, &pin_int1_route);
     pin_int1_route.step_detector = PROPERTY_ENABLE;
     lsm6dsox_pin_int1_route_set(&dev_ctx_, pin_int1_route);
 
-    // INT1 notification: base (pulsed) + embedded (latched).
     lsm6dsox_int_notification_set(&dev_ctx_, LSM6DSOX_BASE_PULSED_EMB_LATCHED);
 
     // Accel ODR must be >= the pedometer's requirement (26 Hz here); gyro off

@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include "imu.h"
-#include "step_codec.h"
 #include "imu_fifo.h"   // FifoSource interface + FifoPattern
 #include "lsm6dsox_reg.h"   // STMicroelectronics standard-C LSM6DSOX driver
 

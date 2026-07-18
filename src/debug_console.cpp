@@ -38,10 +38,10 @@ void DebugConsole::cmdClear() {
 
 void DebugConsole::cmdReset() {
     // Only zero the firmware accumulator + log after the HARDWARE counter has
-    // actually been reset. If the I2C write to PEDO_CMD_REG fails, leaving the
-    // FW total at 0 while the HW counter keeps its old value would make the next
-    // update() report a bogus delta equal to the whole hardware total (the exact
-    // failure mode pedometer.h warns about).
+    // actually been reset. If the ST-driver step reset (lsm6dsox_steps_reset)
+    // fails on I2C, leaving the FW total at 0 while the HW counter keeps its old
+    // value would make the next update() report a bogus delta equal to the whole
+    // hardware total (the exact failure mode pedometer.h warns about).
     if (!imu.resetStepCount()) {
         Serial.println("[ERROR] step-counter hardware reset failed (I2C error)");
         return;
