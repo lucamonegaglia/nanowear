@@ -3,16 +3,16 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <Arduino_LSM6DSOX.h>
 #include "imu.h"
-#include "step_codec.h"
 #include "imu_fifo.h"   // FifoSource interface + FifoPattern
+#include "lsm6dsox_reg.h"   // STMicroelectronics standard-C LSM6DSOX driver
 
 // ---------------------------------------------------------------------------
 // HardwareIMU — LSM6DSOX driver for the Nano RP2040 Connect
 // ---------------------------------------------------------------------------
-// Concrete IMU implementation. It performs the register-level configuration of
-// the sensor's embedded (hardware) pedometer AND (when running dynamics is
+// Concrete IMUSensor. It drives the sensor's embedded (hardware) pedometer
+// through STMicroelectronics' standard-C driver (lsm6dsox_reg.c, vendored in
+// lib/lsm6dsox) over the on-board Wire I2C bus, and (when running dynamics is
 // enabled) streams the raw 6-axis FIFO (accel + gyro at high ODR) so the gait
 // detector can derive running dynamics. Compiled only for the real board; the
 // native test env never sees this file, which is why the testable logic lives
@@ -23,9 +23,16 @@
 // only by the gait detector; it is initialised solely under
 // NANOWEAR_RUNNING_DYNAMICS so the default single-core build matches the
 // validated step-counting path exactly (no ODR change to the pedometer feed).
+//
+// The ST driver is reached through a stmdev_ctx_t whose read/write/delay
+// callbacks (defined in hardware_imu.cpp) talk to Wire at the IMU's 7-bit
+// address 0x6A. The driver owns all register/embedded-function-bank details;
+// this class only sequences the high-level configuration steps.
 // ---------------------------------------------------------------------------
 class HardwareIMU : public IMUSensor, public FifoSource {
 public:
+    HardwareIMU();
+
     // Initialise the sensor: presence check + embedded pedometer. When
     // NANOWEAR_RUNNING_DYNAMICS is set, the FIFO stream is also configured.
     // Returns true only if the required steps succeed.
@@ -34,13 +41,9 @@ public:
     // Read the cumulative step count. Returns false on a transport error.
     bool readStepCount(uint16_t& out) override;
 
-    // Zero the hardware step counter in place (PEDO_RST_STEP), without
-    // re-running the full pedometer init. Used when a phone requests a reset
-    // over BLE. Mirrors step 3 of initHardwarePedometer.
-    void resetPedometerSteps();
-
     // Zero the embedded pedometer's step counter (IMUSensor interface), leaving
-    // the algorithm enabled. Returns true on success; used by the debug console.
+    // the algorithm enabled. Returns true on success; used by the debug console
+    // and the BLE "reset" command.
     bool resetStepCount() override;
 
     // --- FifoSource (raw burst reader) -----------------------------------
@@ -54,45 +57,28 @@ public:
     float samplePeriodMs() const { return dtMs_; }
     const FifoPattern& fifoPattern() const { return fifoPattern_; }
 
+    // LSM6DSOX I2C device address (7-bit). Public so the file-scope ST-driver
+    // platform callbacks (which are not class members) can reach it; the ST
+    // header's LSM6DSOX_I2C_ADD_L is the 8-bit form 0xD5 = 0x6A << 1, which
+    // Arduino Wire does not want.
+    static constexpr uint8_t LSM6DSOX_I2C_ADDR = 0x6A;
+
 private:
     // Write a single byte to an IMU register over I2C. Returns true on ACK.
+    // Used by the FIFO path; the pedometer path goes through the ST driver.
     bool writeRegister(uint8_t reg, uint8_t value);
 
     // Read a single byte from an IMU register over I2C. Returns 0 on NACK.
     uint8_t readRegister(uint8_t reg);
 
-    // Configure the LSM6DSOX embedded pedometer engine (called from begin()).
+    // Configure the LSM6DSOX embedded pedometer engine via the ST driver
+    // (called from begin()). Returns true on success.
     bool initHardwarePedometer();
 
     // Configure the FIFO for accel+gyro streaming at 1.66 kHz (continuous
     // mode). Also caches the scale factors + sample period used by decodeFifo.
     // Only invoked under NANOWEAR_RUNNING_DYNAMICS.
     bool initFifo();
-
-    // Open / close the Embedded Functions configuration register bank.
-    bool openFuncBank();
-    bool closeFuncBank();
-
-    static constexpr uint8_t SUBADDR_AUTO_INC = 0x80; // MSB of sub-address = burst read
-
-    // LSM6DSOX I2C device address
-    static constexpr uint8_t LSM6DSOX_I2C_ADDR = 0x6A;
-
-    // Embedded Functions register map
-    static constexpr uint8_t FUNC_CFG_ACCESS      = 0x01;
-    static constexpr uint8_t EMB_FUNC_EN_A        = 0x04;
-    static constexpr uint8_t PEDO_CMD_REG         = 0x83;
-    static constexpr uint8_t INT1_CTRL            = 0x0D;
-    static constexpr uint8_t EMB_FUNC_INT1        = 0x0A;
-
-    // Step counter register offsets (Page 0 of Embedded Advanced Registers)
-    static constexpr uint8_t STEP_COUNTER_L       = 0x4B;
-    static constexpr uint8_t STEP_COUNTER_H       = 0x4C;
-
-    // FUNC_CFG_ACCESS bank-select magic values
-    static constexpr uint8_t FUNC_CFG_BANK        = 0x80; // access embedded func config
-    static constexpr uint8_t ADV_INT_BANK         = 0x40; // access advanced interrupt page
-    static constexpr uint8_t FUNC_CFG_BANK_CLOSE  = 0x00; // return to default page
 
     // --- FIFO register map (user bank; no FUNC_CFG_ACCESS switch) --------
     static constexpr uint8_t CTRL1_XL    = 0x10;  // accel ODR + full-scale
@@ -102,6 +88,9 @@ private:
     static constexpr uint8_t FIFO_CTRL5   = 0x0B;  // FIFO mode
     static constexpr uint8_t FIFO_STATUS1 = 0x3A;  // DIFF_FIFO (unread words)
     static constexpr uint8_t FIFO_DATA_OUT_L = 0x3E;  // FIFO data (burst read)
+
+    // ST standard-C driver context (read/write/delay callbacks -> Wire).
+    stmdev_ctx_t dev_ctx_;
 
     // Scale factors at the chosen full-scale (LSB -> physical):
     float aScale_ = 0.000122f;   // ±4g  -> 0.122 mg/LSB  = 0.000122 g/LSB
