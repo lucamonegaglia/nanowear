@@ -124,8 +124,9 @@ bool HardwareIMU::initHardwarePedometer() {
     // Enable the embedded pedometer (advanced false-step-rejection mode).
     lsm6dsox_pedo_sens_set(&dev_ctx_, LSM6DSOX_FALSE_STEP_REJ_ADV_MODE);
     // Enable the pedometer ("step") embedded function. The MLC (machine-learning
-    // core) is a separate feature and is intentionally left disabled (KISS).
-    lsm6dsox_emb_sens_t emb_sens;
+    // core) and other embedded functions are separate features and are kept
+    // disabled: zero-initialise the struct so only `step` is set below.
+    lsm6dsox_emb_sens_t emb_sens = {};
     emb_sens.step = PROPERTY_ENABLE;
     lsm6dsox_embedded_sens_set(&dev_ctx_, &emb_sens);
 
