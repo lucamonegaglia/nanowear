@@ -68,11 +68,12 @@
 //     I2C — it only reads the lock-guarded shared snapshot and pushes it to a
 //     connected phone, keeping BLE responsive (no I2C burst blocking the radio).
 //   * Core1 (setup1/loop1): OWNS the IMU. It drains the LSM6DSOX FIFO, runs the
-//     GaitDetector, polls the embedded pedometer, and writes the latest
-//     metrics/steps into the shared snapshot. Keeping ALL I2C on one core avoids
-//     contending the single bus from two cores. The embedded (MLC) pedometer
-//     still provides the authoritative low-power step count (CLAUDE.md
-//     constraint); the raw FIFO only feeds the running-dynamics proxies.
+//     GaitDetector, and writes the latest metrics/steps into the shared
+//     snapshot. Keeping ALL I2C on one core avoids contending the single bus
+//     from two cores. In the dual-core build the software step detector (the
+//     authoritative count in the default build) runs on Core1 from the FIFO
+//     stream; the embedded (MLC) pedometer is only an opt-in source, and the
+//     raw FIFO also feeds the running-dynamics proxies.
 // ---------------------------------------------------------------------------
 
 // --- Object ownership (mode-independent) ---------------------------------

@@ -18,11 +18,12 @@
 // native test env never sees this file, which is why the testable logic lives
 // behind the IMU interface and the FifoSource seam.
 //
-// The embedded pedometer stays the authoritative low-power step counter in
-// BOTH modes (CLAUDE.md constraint). The FIFO is an ADDITIONAL stream consumed
-// only by the gait detector; it is initialised solely under
-// NANOWEAR_RUNNING_DYNAMICS so the default single-core build matches the
-// validated step-counting path exactly (no ODR change to the pedometer feed).
+// The DEFAULT build's authoritative step count now comes from the custom
+// software step detector, fed by the raw FIFO stream (the embedded MLC
+// pedometer proved unreliable on hardware and is opt-in behind
+// NANOWEAR_MLC_PEDOMETER). The FIFO is therefore ALWAYS configured in begin()
+// so the software detector has a stream; the opt-in running-dynamics gait
+// detector also consumes it.
 // ---------------------------------------------------------------------------
 class HardwareIMU : public IMUSensor, public FifoSource {
 public:
@@ -66,7 +67,8 @@ private:
 
     // Configure the FIFO for accel+gyro streaming at 1.66 kHz (continuous
     // mode). Also caches the scale factors + sample period used by decodeFifo.
-    // Only invoked under NANOWEAR_RUNNING_DYNAMICS.
+    // Called unconditionally from begin() — the software step detector (the
+    // default step source) and the opt-in gait detector both need this stream.
     bool initFifo();
 
     // Open / close the Embedded Functions configuration register bank.
