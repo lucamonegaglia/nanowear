@@ -77,14 +77,20 @@ HardwareIMU::HardwareIMU() {
 }
 
 bool HardwareIMU::begin() {
-    // Configure the embedded pedometer engine + presence check (resets the
-    // hardware count to 0). Under running dynamics, also stream the FIFO.
+    // Presence check + embedded (MLC) pedometer configuration via the ST driver.
+    // WHO_AM_I (inside initHardwarePedometer) replaces the Arduino_LSM6DSOX
+    // IMU.begin() as the presence check. The MLC pedometer is an OPTIONAL legacy
+    // step source that proved unreliable on hardware, so the default firmware
+    // counts steps with the software detector fed by the FIFO stream instead.
     if (!initHardwarePedometer()) return false;
-#ifdef NANOWEAR_RUNNING_DYNAMICS
-    return initFifo();
-#else
-    return true;
-#endif
+
+    bool ok = true;
+    // ALWAYS stream the raw 6-axis FIFO (accel + gyro @ 1.66 kHz). The software
+    // step detector (the default source) needs this stream, and the opt-in
+    // running-dynamics gait detector consumes it too. A single FIFO read fans
+    // out to every consumer via the SampleConsumer seam in main.cpp.
+    ok &= initFifo();
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,9 +192,13 @@ bool HardwareIMU::initFifo() {
     // Gyro:  ODR 1.66 kHz (1000b), full-scale ±2000 dps (11b) -> 0x8C.
     ok &= writeRegister(CTRL2_G,  0x8C);
 
-    // Route accel + gyro into the FIFO with NO decimation (every sample).
-    //   DEC_FIFO_XL[2:0] = 001, DEC_FIFO_GY[5:3] = 001.
-    ok &= writeRegister(FIFO_CTRL3, 0x09);
+    // Route accel + gyro into the FIFO at full ODR (no decimation). The
+    // FIFO_CTRL3 field is a Batching Data Rate (BDR) selector, NOT a raw
+    // decimation factor: 0x8 == 1667 Hz, which matches our 1.66 kHz ODR, so
+    // every sample is stored. bdr_gy[7:4] = 0x8, bdr_xl[3:0] = 0x8 -> 0x88.
+    // (A 0x0 nibble means "not batched"; 0x09 left gyro excluded and accel in
+    //  an out-of-range BDR, so the FIFO never filled -> all-zero samples.)
+    ok &= writeRegister(FIFO_CTRL3, 0x88);
 
     // Continuous (streaming) FIFO mode (MODE[2:0] = 110).
     ok &= writeRegister(FIFO_CTRL5, 0x06);

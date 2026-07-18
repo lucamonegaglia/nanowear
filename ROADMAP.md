@@ -49,9 +49,10 @@ any GPS of their own. No custom app required to ship v1.
 - **Board:** Arduino Nano RP2040 Connect (RP2040 + u-blox NINA-W102). Non-negotiable.
 - **Toolchain:** PlatformIO, `platform = raspberrypi`, `board = nanorp2040connect`,
   `framework = arduino`, build `-O2`.
-- **Step counting:** LSM6DSOX **embedded hardware pedometer** (MLC), not software.
-  Already implemented in `src/main.cpp` via register-level helpers
-  (`writeRegister`/`readRegister`) — INT1 routed for step-detection.
+- **Step counting:** a custom **software step detector** on the RP2040, fed by the
+  LSM6DSOX FIFO stream (`src/step_detector.{h,cpp}`). The chip's embedded (MLC)
+  pedometer proved unreliable on hardware and is now opt-in behind
+  `NANOWEAR_MLC_PEDOMETER` (still wired via `writeRegister`/`readRegister`).
 - **Onboard RGB LED:** driven through the NINA via `WiFiNINA.h` (`LEDR/LEDG/LEDB`),
   **common-anode / active-low** (`LOW` = ON). Keep this exact scheme.
 - **Style:** non-blocking (no `delay()`), `millis()`/interrupts, memory- and
@@ -63,9 +64,10 @@ any GPS of their own. No custom app required to ship v1.
 
 ### H0 — Current bench prototype ✅ (mostly done)
 - Nano RP2040 Connect on a desk, USB-powered.
-- IMU hardware pedometer running and printing step counts (see `src/main.cpp`).
+- Software step detector running and printing step counts (see `src/main.cpp`).
 - **To close out H0:** confirm step counts are sane with the board worn above the
-  ankle; verify INT1 actually fires (wire a scope/LED or count interrupts).
+  ankle; verify the FIFO-fed detector stream (and, if the opt-in MLC pedometer is
+  enabled, that INT1 actually fires).
 
 ### H1 — Power subsystem (first real hardware task)
 - **Battery:** 3.7 V Li-Po, ~1000 mAh target (per `AGENTS.md`).
@@ -122,13 +124,14 @@ calibration + step/cadence validation.
 
 ## 3. Software roadmap
 
-### S0 — IMU hardware pedometer ✅
-- Embedded pedometer configured in `HardwareIMU::begin()` (which calls
-  `initHardwarePedometer()`); counts read via the `IMUSensor::readStepCount()`
-  interface in `src/hardware_imu.{h,cpp}`, behind the `IMUSensor` abstraction
-  (see `src/imu.h`). Transport errors are now surfaced rather than swallowed.
-  Done.
-- Close-out: sanity-check counts; confirm INT1 step-detection interrupt.
+### S0 — Step counting ✅
+- Active source is the custom **software step detector** (`src/step_detector.{h,cpp}`),
+  fed by the LSM6DSOX FIFO stream through the `SampleConsumer` seam and exposed via
+  the `StepSource` seam (`read`/`reset`). The embedded (MLC) pedometer is retained
+  but opt-in behind `NANOWEAR_MLC_PEDOMETER` via `IMUSensor::readStepCount()` in
+  `src/hardware_imu.{h,cpp}` (see `src/imu.h`). Transport errors are surfaced
+  rather than swallowed. Done.
+- Close-out: sanity-check counts on the board; tune detector constants if needed.
 
 ### S1 — Non-blocking state machine + sleep skeleton
 - Replace the flat `loop()` poll with a small **state machine**
@@ -166,7 +169,7 @@ calibration + step/cadence validation.
 - Optional **OTA update** of the RP2040 sketch (skip until stable).
 
 ### S6 — GPS integration (onboard GPS + step fusion)
-- Read `TinyGPSPlus` from the external GPS module, fuse with the hardware step count,
+- Read `TinyGPSPlus` from the external GPS module, fuse with the step count,
   and build the GPX track **on-device**. The phone is never the GPS source.
 - The BLE RSC channel still streams live cadence/steps to the phone as a display; the
   full GPS track is delivered via the offline buffer (S4/H5) or a bulk transfer.
@@ -244,7 +247,7 @@ e.g. on-device GPS fusion, custom haptics cues, or a branded UI):
 
 ## 7. Suggested milestones (rough order)
 
-1. **M1 — Confirm & power:** verify pedometer on-ankle; resolve H1 battery/charging.
+1. **M1 — Confirm & power:** verify step counting on-ankle; resolve H1 battery/charging.
 2. **M2 — BLE RSC MVP:** NINA 3.0.1 + `ArduinoBLE`; advertise steps/cadence; pair with
    RunnerUp/OpenTracks; walk → phone shows steps. **(First "connects to phone" win.)**
 3. **M3 — Strava E2E:** full walk → BLE → phone app → Strava activity.

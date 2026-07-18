@@ -18,11 +18,11 @@
 // native test env never sees this file, which is why the testable logic lives
 // behind the IMU interface and the FifoSource seam.
 //
-// The embedded pedometer stays the authoritative low-power step counter in
-// BOTH modes (CLAUDE.md constraint). The FIFO is an ADDITIONAL stream consumed
-// only by the gait detector; it is initialised solely under
-// NANOWEAR_RUNNING_DYNAMICS so the default single-core build matches the
-// validated step-counting path exactly (no ODR change to the pedometer feed).
+// The DEFAULT build's authoritative step count comes from the custom software
+// step detector, fed by the raw FIFO stream (the embedded MLC pedometer proved
+// unreliable on hardware and is configured here as a legacy/optional source).
+// The FIFO is therefore ALWAYS configured in begin() so the software detector
+// has a stream; the opt-in running-dynamics gait detector also consumes it.
 //
 // The ST driver is reached through a stmdev_ctx_t whose read/write/delay
 // callbacks (defined in hardware_imu.cpp) talk to Wire at the IMU's 7-bit
@@ -57,6 +57,9 @@ public:
     float samplePeriodMs() const { return dtMs_; }
     const FifoPattern& fifoPattern() const { return fifoPattern_; }
 
+    // Debug accessor for on-device FIFO bring-up: read any register.
+    uint8_t debugReadReg(uint8_t reg) { return readRegister(reg); }
+
     // LSM6DSOX I2C device address (7-bit). Public so the file-scope ST-driver
     // platform callbacks (which are not class members) can reach it; the ST
     // header's LSM6DSOX_I2C_ADD_L is the 8-bit form 0xD5 = 0x6A << 1, which
@@ -77,7 +80,8 @@ private:
 
     // Configure the FIFO for accel+gyro streaming at 1.66 kHz (continuous
     // mode). Also caches the scale factors + sample period used by decodeFifo.
-    // Only invoked under NANOWEAR_RUNNING_DYNAMICS.
+    // Called unconditionally from begin() — the software step detector (the
+    // default step source) and the opt-in gait detector both need this stream.
     bool initFifo();
 
     // --- FIFO register map (user bank; no FUNC_CFG_ACCESS switch) --------

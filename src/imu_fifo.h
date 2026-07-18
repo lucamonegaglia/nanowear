@@ -29,6 +29,23 @@ struct ImuSample {
     uint32_t ts = 0;                    // timestamp, ms
 };
 
+// ---------------------------------------------------------------------------
+// SampleConsumer — a sink for decoded IMU samples
+// ---------------------------------------------------------------------------
+// The unified FIFO sampler (see main.cpp) reads the LSM6DSOX FIFO once and
+// dispatches every decoded sample to all registered consumers, so a single I2C
+// burst fans out to every downstream algorithm (the software step detector, the
+// gait detector, ...) without contending the bus from multiple readers.
+//
+// Implement onSample() to receive each sample in stream order. The interface is
+// deliberately tiny and free of I2C/millis(), so consumers stay host-testable.
+// ---------------------------------------------------------------------------
+class SampleConsumer {
+public:
+    virtual ~SampleConsumer() = default;
+    virtual void onSample(const ImuSample& s) = 0;
+};
+
 // Describes what is packed into each FIFO sample so the parser stays generic.
 // For Tier A we enable accel + gyro with no embedded timestamp: that is a
 // fixed 12-byte pattern (3 axes * 2 bytes * 2 sensors). Add fields here
@@ -139,15 +156,19 @@ inline size_t decodeFifo(const uint8_t* buf, size_t len,
                                        (static_cast<uint16_t>(q[1]) << 8));
         };
 
-        if (pattern.accel) {
-            s.ax = le16(p + off) * aScale; off += 2;
-            s.ay = le16(p + off) * aScale; off += 2;
-            s.az = le16(p + off) * aScale; off += 2;
-        }
+        // LSM6DSOX FIFO stores the GYRO set BEFORE the ACCEL set (6 words each,
+        // no embedded timestamp): GYRO_X/Y/Z then XL_X/Y/Z. Decode in that order
+        // so ax/ay/az carry linear acceleration (what the step/gait detectors
+        // need) and gx/gy/gz carry angular rate — NOT the reverse.
         if (pattern.gyro) {
             s.gx = le16(p + off) * gScale; off += 2;
             s.gy = le16(p + off) * gScale; off += 2;
             s.gz = le16(p + off) * gScale; off += 2;
+        }
+        if (pattern.accel) {
+            s.ax = le16(p + off) * aScale; off += 2;
+            s.ay = le16(p + off) * aScale; off += 2;
+            s.az = le16(p + off) * aScale; off += 2;
         }
         // (timestamp flag reserved for future patterns; not consumed yet)
 
