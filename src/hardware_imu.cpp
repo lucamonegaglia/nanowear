@@ -33,6 +33,43 @@ bool HardwareIMU::closeFuncBank() {
 }
 
 // ---------------------------------------------------------------------------
+// STM C driver transport seam (Wire-backed)
+// ---------------------------------------------------------------------------
+// The official lsm6dsox_reg.h driver is a struct of function pointers
+// (stmdev_ctx_t); these three static methods implement that seam over the
+// Arduino `Wire` bus. `handle` is &Wire (set in begin()). Return convention
+// follows the driver: 0 == success, negative == error.
+
+// Write `len` bytes starting at `reg` (single I2C transaction, STOP at end).
+int32_t HardwareIMU::platform_write_(void* handle, uint8_t reg,
+                                     const uint8_t* bufp, uint16_t len) {
+    TwoWire* w = static_cast<TwoWire*>(handle);
+    w->beginTransmission(LSM6DSOX_I2C_ADDR);
+    w->write(reg);
+    w->write(bufp, len);
+    return (w->endTransmission() == 0) ? 0 : -1;
+}
+
+// Read `len` bytes starting at `reg` using a repeated-start (no STOP between the
+// address write and the data read) so the read is atomic and the bus is not
+// released mid-transaction.
+int32_t HardwareIMU::platform_read_(void* handle, uint8_t reg,
+                                    uint8_t* bufp, uint16_t len) {
+    TwoWire* w = static_cast<TwoWire*>(handle);
+    w->beginTransmission(LSM6DSOX_I2C_ADDR);
+    w->write(reg);
+    if (w->endTransmission(false) != 0) return -1;   // repeated-start
+    if (w->requestFrom(LSM6DSOX_I2C_ADDR, static_cast<uint8_t>(len)) != len)
+        return -1;
+    for (uint16_t i = 0; i < len; i++)
+        bufp[i] = static_cast<uint8_t>(w->read());
+    return 0;
+}
+
+// Millisecond delay the driver uses for reset / power-up waits.
+void HardwareIMU::platform_delay_(uint32_t ms) { delay(ms); }
+
+// ---------------------------------------------------------------------------
 // Embedded pedometer configuration
 // ---------------------------------------------------------------------------
 
@@ -67,6 +104,15 @@ bool HardwareIMU::initHardwarePedometer() {
 bool HardwareIMU::begin() {
     // IMU.begin() is the high-level Arduino_LSM6DSOX presence check.
     if (!IMU.begin()) return false;
+
+    // Wire up the ST C driver context over I2C. The platform_* helpers above
+    // carry the actual bus access; &Wire is the opaque handle the driver passes
+    // back. Done unconditionally so the FIFO path is always valid if enabled.
+    ctx_.write_reg = platform_write_;
+    ctx_.read_reg  = platform_read_;
+    ctx_.mdelay    = platform_delay_;
+    ctx_.handle    = &Wire;
+
     // Configure the embedded pedometer engine (resets the hardware count to 0).
     bool ok = initHardwarePedometer();
     // ALSO stream the raw 6-axis FIFO for running-dynamics detection — but only
@@ -125,27 +171,50 @@ bool HardwareIMU::resetStepCount() {
 // FIFO streaming (running-dynamics source)
 // ---------------------------------------------------------------------------
 
-// Configure the LSM6DSOX FIFO to stream accel + gyro at 1.66 kHz in
-// continuous (streaming) mode. We deliberately use the ODR-derived timestamp
-// in the decoder (not the sensor's own FIFO timestamp) to keep the byte
-// format simple and the host parser trivial.
+// Configure the LSM6DSOX FIFO to stream accel + gyro at 1.66 kHz in continuous
+// (streaming) mode, using the official ST C driver (mirrors lsm6dsox_fifo.c).
+// The driver programs the sensor's tag-based FIFO; read() then repacks each
+// accel+gyro pair into the flat 12-byte record decodeFifo expects. The scale
+// factors and sample period are cached with their existing values so the
+// host-side decoder is byte-for-byte unchanged.
 bool HardwareIMU::initFifo() {
     bool ok = true;
+    int32_t rc;
 
-    // Accel: ODR 1.66 kHz (1000b), full-scale ±4 g (01b) -> 0x84.
-    ok &= writeRegister(CTRL1_XL, 0x84);
-    // Gyro:  ODR 1.66 kHz (1000b), full-scale ±2000 dps (11b) -> 0x8C.
-    ok &= writeRegister(CTRL2_G,  0x8C);
+    // Output registers update only after both MSB and LSB are read (no torn
+    // samples across the I2C read).
+    rc = lsm6dsox_block_data_update_set(&ctx_, PROPERTY_ENABLE);
+    ok &= (rc == 0);
 
-    // Route accel + gyro into the FIFO with NO decimation (every sample).
-    //   DEC_FIFO_XL[2:0] = 001, DEC_FIFO_GY[5:3] = 001.
-    ok &= writeRegister(FIFO_CTRL3, 0x09);
+    // Full scale: accel ±4 g, gyro ±2000 dps — must match the decode scales.
+    rc = lsm6dsox_xl_full_scale_set(&ctx_, LSM6DSOX_4g);
+    ok &= (rc == 0);
+    rc = lsm6dsox_gy_full_scale_set(&ctx_, LSM6DSOX_2000dps);
+    ok &= (rc == 0);
 
-    // Continuous (streaming) FIFO mode (MODE[2:0] = 110).
-    ok &= writeRegister(FIFO_CTRL5, 0x06);
+    // FIFO watermark (in entries) bounds a single drain; read() still drains by
+    // level, so this is a safety ceiling rather than a trigger.
+    rc = lsm6dsox_fifo_watermark_set(&ctx_, 256);
+    ok &= (rc == 0);
 
-    // Cache the scale factors + sample period the host decoder needs. These
-    // match the full-scale chosen above.
+    // Batch accel + gyro into the FIFO at 1.66 kHz, no decimation.
+    rc = lsm6dsox_fifo_xl_batch_set(&ctx_, LSM6DSOX_XL_BATCHED_AT_1667Hz);
+    ok &= (rc == 0);
+    rc = lsm6dsox_fifo_gy_batch_set(&ctx_, LSM6DSOX_GY_BATCHED_AT_1667Hz);
+    ok &= (rc == 0);
+
+    // Continuous (streaming) FIFO mode.
+    rc = lsm6dsox_fifo_mode_set(&ctx_, LSM6DSOX_STREAM_MODE);
+    ok &= (rc == 0);
+
+    // Output data rate: accel + gyro at 1.66 kHz (drives the FIFO batches).
+    rc = lsm6dsox_xl_data_rate_set(&ctx_, LSM6DSOX_XL_ODR_1667Hz);
+    ok &= (rc == 0);
+    rc = lsm6dsox_gy_data_rate_set(&ctx_, LSM6DSOX_GY_ODR_1667Hz);
+    ok &= (rc == 0);
+
+    // Cache the scale factors + sample period the host decoder needs. Kept
+    // identical to the prior values so decodeFifo output is unchanged.
     aScale_ = 0.000122f;   // ±4g  -> 0.122 mg/LSB
     gScale_ = 0.070f;      // ±2000 dps -> 70 mdps/LSB
     dtMs_   = 1000.f / 1660.f;  // sample period at 1.66 kHz
@@ -159,39 +228,50 @@ bool HardwareIMU::initFifo() {
     return ok;
 }
 
-// Drain the FIFO into `out` (up to `cap` bytes). The sensor reports the
-// number of UNREAD 16-bit WORDS in FIFO_STATUS1; our pattern is 6 words
-// (12 bytes) per sample, so we burst-read a whole number of samples.
+// Drain the LSM6DSOX FIFO into `out` (up to `cap` bytes) and repack it into the
+// flat 12-byte (accel[6] ‖ gyro[6]) layout decodeFifo expects. The hardware FIFO
+// is tag-based — each entry is 1 tag byte + 6 data bytes, with accel/gyro
+// entries interleaved — read through the ST driver's tag + raw getters. We stage
+// each accel and gyro payload and emit a 12-byte record once a matching pair
+// arrives, so the rest of the pipeline (decodeFifo / GaitDetector) is unchanged.
 bool HardwareIMU::read(uint8_t* out, size_t cap, size_t& filled) {
     filled = 0;
 
-    // DIFF_FIFO[5:0] = unread 16-bit words.
-    uint8_t diff = readRegister(FIFO_STATUS1) & 0x3F;
-    if (diff == 0) return false;   // empty: not an error
+    // Number of unread FIFO entries (each entry = tag + 6 data bytes).
+    uint16_t entries = 0;
+    if (lsm6dsox_fifo_data_level_get(&ctx_, &entries) != 0) return false;
+    if (entries == 0) return false;
 
-    const uint8_t bps = fifoPattern_.bytesPerSample();   // 12
-    const uint8_t wordsPerSample = bps / 2;                     // 6
-    uint8_t nSamples = diff / wordsPerSample;                  // whole samples
-    if (nSamples == 0) return false;
+    uint8_t accelBuf[6] = {0};
+    uint8_t gyroBuf[6]  = {0};
+    bool haveAccel = false, haveGyro = false;
 
-    size_t bytes = static_cast<size_t>(nSamples) * bps;
-    if (bytes > cap) {                       // trim to the buffer, whole samples
-        bytes = (cap / bps) * bps;
-        nSamples = static_cast<uint8_t>(bytes / bps);
+    while (entries--) {
+        lsm6dsox_fifo_tag_t tag;
+        uint8_t raw[6];
+        // Read one entry: its tag, then its 6 data bytes. The driver advances
+        // the FIFO read pointer past the whole entry on each call.
+        if (lsm6dsox_fifo_sensor_tag_get(&ctx_, &tag) != 0) return false;
+        if (lsm6dsox_fifo_out_raw_get(&ctx_, raw)   != 0) return false;
+
+        if (tag == LSM6DSOX_XL_NC_TAG) {
+            memcpy(accelBuf, raw, 6); haveAccel = true;
+        } else if (tag == LSM6DSOX_GYRO_NC_TAG) {
+            memcpy(gyroBuf, raw, 6); haveGyro = true;
+        } else {
+            continue;   // unhandled tag (e.g. timestamp / step) — skip the entry
+        }
+
+        // Got a complete accel+gyro pair: pack it as accel[6] ‖ gyro[6].
+        if (haveAccel && haveGyro) {
+            if (filled + 12 > cap) break;   // output full; stop draining
+            memcpy(out + filled,     accelBuf, 6);
+            memcpy(out + filled + 6, gyroBuf,  6);
+            filled += 12;
+            haveAccel = haveGyro = false;
+        }
     }
-    if (nSamples == 0) return false;
 
-    // Burst-read FIFO_DATA_OUT_L (3Eh); the FIFO auto-increments on each
-    // read, so one repeated-start transaction pulls the whole batch.
-    Wire.beginTransmission(LSM6DSOX_I2C_ADDR);
-    Wire.write(FIFO_DATA_OUT_L);
-    if (Wire.endTransmission(false) != 0) return false;   // NACK -> error
-    uint8_t n = Wire.requestFrom(LSM6DSOX_I2C_ADDR, static_cast<uint8_t>(bytes));
-    if (n != bytes) return false;
-
-    for (size_t i = 0; i < bytes; i++) {
-        out[i] = static_cast<uint8_t>(Wire.read());
-    }
-    filled = bytes;
-    return true;
+    // true if we emitted at least one full sample; false on empty/partial drain.
+    return filled > 0;
 }

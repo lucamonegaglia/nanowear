@@ -3,6 +3,16 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+
+// STMicroelectronics standard C driver for the LSM6DSOX. Vendored under
+// lib/lsm6dsox_reg/ (BSD-3-Clause). This is the same driver the STM FIFO
+// example (lsm6dsox_fifo.c) is written against; the board-only FIFO path uses
+// it to configure and drain the sensor's tag-based FIFO instead of hand-rolled
+// register writes. Wrapped in extern "C" because the header is plain C.
+extern "C" {
+#include <lsm6dsox_reg.h>
+}
+
 #include <Arduino_LSM6DSOX.h>
 #include "imu.h"
 #include "step_codec.h"
@@ -65,9 +75,18 @@ private:
     bool initHardwarePedometer();
 
     // Configure the FIFO for accel+gyro streaming at 1.66 kHz (continuous
-    // mode). Also caches the scale factors + sample period used by decodeFifo.
-    // Only invoked under NANOWEAR_RUNNING_DYNAMICS.
+    // mode) using the ST C driver. Also caches the scale factors + sample
+    // period used by decodeFifo. Only invoked under NANOWEAR_RUNNING_DYNAMICS.
     bool initFifo();
+
+    // STM C driver transport seam: thin Wire wrappers the driver calls to reach
+    // the LSM6DSOX. `handle` is &Wire (set in begin()). Signatures match the
+    // stmdev_{write,read}_ptr typedefs the driver expects.
+    static int32_t platform_write_(void* handle, uint8_t reg,
+                                    const uint8_t* bufp, uint16_t len);
+    static int32_t platform_read_(void* handle, uint8_t reg,
+                                   uint8_t* bufp, uint16_t len);
+    static void    platform_delay_(uint32_t ms);
 
     // Open / close the Embedded Functions configuration register bank.
     bool openFuncBank();
@@ -94,14 +113,10 @@ private:
     static constexpr uint8_t ADV_INT_BANK         = 0x40; // access advanced interrupt page
     static constexpr uint8_t FUNC_CFG_BANK_CLOSE  = 0x00; // return to default page
 
-    // --- FIFO register map (user bank; no FUNC_CFG_ACCESS switch) --------
-    static constexpr uint8_t CTRL1_XL    = 0x10;  // accel ODR + full-scale
-    static constexpr uint8_t CTRL2_G     = 0x11;  // gyro  ODR + full-scale
-    static constexpr uint8_t FIFO_CTRL1   = 0x07;  // watermark (low byte)
-    static constexpr uint8_t FIFO_CTRL3   = 0x09;  // accel/gyro decimation
-    static constexpr uint8_t FIFO_CTRL5   = 0x0B;  // FIFO mode
-    static constexpr uint8_t FIFO_STATUS1 = 0x3A;  // DIFF_FIFO (unread words)
-    static constexpr uint8_t FIFO_DATA_OUT_L = 0x3E;  // FIFO data (burst read)
+    // --- STM C driver context (set up in begin()) ------------------------
+    // The official LSM6DSOX driver is a struct of function pointers; we back it
+    // with the Wire wrappers above and pass &Wire as the opaque handle.
+    stmdev_ctx_t ctx_{};
 
     // Scale factors at the chosen full-scale (LSB -> physical):
     float aScale_ = 0.000122f;   // ±4g  -> 0.122 mg/LSB  = 0.000122 g/LSB
