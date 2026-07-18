@@ -30,10 +30,12 @@ void test_decode_fifo_roundtrip(void) {
         p[0] = static_cast<uint8_t>(v & 0xFF);
         p[1] = static_cast<uint8_t>((v >> 8) & 0xFF);
     };
-    put(&buf[0],  s0[0]); put(&buf[2],  s0[1]); put(&buf[4],  s0[2]);
-    put(&buf[6],  s0[3]); put(&buf[8],  s0[4]); put(&buf[10], s0[5]);
-    put(&buf[12], s1[0]); put(&buf[14], s1[1]); put(&buf[16], s1[2]);
-    put(&buf[18], s1[3]); put(&buf[20], s1[4]); put(&buf[22], s1[5]);
+    // LSM6DSOX FIFO stores the GYRO set before the ACCEL set, so the raw bytes
+    // are gyro first (offset 0..5) then accel (offset 6..11).
+    put(&buf[0],  s0[3]); put(&buf[2],  s0[4]); put(&buf[4],  s0[5]);
+    put(&buf[6],  s0[0]); put(&buf[8],  s0[1]); put(&buf[10], s0[2]);
+    put(&buf[12], s1[3]); put(&buf[14], s1[4]); put(&buf[16], s1[5]);
+    put(&buf[18], s1[0]); put(&buf[20], s1[1]); put(&buf[22], s1[2]);
 
     // scale = 1 so raw LSB == physical unit (exact comparison).
     FifoPattern pat;   // default: accel + gyro, no timestamp

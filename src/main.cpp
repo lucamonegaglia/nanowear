@@ -99,6 +99,11 @@ static constexpr int kMaxConsumers = 4;
 static SampleConsumer* g_consumers[kMaxConsumers] = {nullptr};
 static int g_nConsumers = 0;
 
+// Bring-up snapshot of the most recent decoded sample (DEBUG build only): lets
+// on-device bring-up confirm which FIFO field carries the accelerometer (gravity
+// ~1 g at rest) vs the gyro (~0 at rest) after the gyro-first decode fix.
+static ImuSample g_lastSample;
+
 static void addConsumer(SampleConsumer* c) {
     if (c && g_nConsumers < kMaxConsumers) g_consumers[g_nConsumers++] = c;
 }
@@ -115,6 +120,7 @@ static void drainFifo(uint8_t* fifoBuf, ImuSample* samples, float& tsBase) {
                 if (g_consumers[c]) g_consumers[c]->onSample(samples[i]);
             }
         }
+        if (n > 0) g_lastSample = samples[n - 1];
     }
 }
 
@@ -341,6 +347,19 @@ void loop() {
 #ifndef NANOWEAR_MLC_PEDOMETER
         Serial.print("[STEPDETECT] cadence: ");
         Serial.println(stepSrc.getCadenceSpm());
+#endif
+
+#if defined(COM_MODE_DEBUG)
+        // Bring-up diagnostic: at rest the accel field should show ~1 g on one
+        // axis (gravity) and the gyro ~0, confirming the gyro-first FIFO decode.
+        Serial.print("[DBG] a(x,y,z)=");
+        Serial.print(g_lastSample.ax, 2); Serial.print(",");
+        Serial.print(g_lastSample.ay, 2); Serial.print(",");
+        Serial.print(g_lastSample.az, 2);
+        Serial.print(" g(x,y,z)=");
+        Serial.print(g_lastSample.gx, 1); Serial.print(",");
+        Serial.print(g_lastSample.gy, 1); Serial.print(",");
+        Serial.println(g_lastSample.gz, 1);
 #endif
 
 #if defined(COM_MODE_BLE)

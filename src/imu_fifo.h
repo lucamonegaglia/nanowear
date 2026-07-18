@@ -156,15 +156,19 @@ inline size_t decodeFifo(const uint8_t* buf, size_t len,
                                        (static_cast<uint16_t>(q[1]) << 8));
         };
 
-        if (pattern.accel) {
-            s.ax = le16(p + off) * aScale; off += 2;
-            s.ay = le16(p + off) * aScale; off += 2;
-            s.az = le16(p + off) * aScale; off += 2;
-        }
+        // LSM6DSOX FIFO stores the GYRO set BEFORE the ACCEL set (6 words each,
+        // no embedded timestamp): GYRO_X/Y/Z then XL_X/Y/Z. Decode in that order
+        // so ax/ay/az carry linear acceleration (what the step/gait detectors
+        // need) and gx/gy/gz carry angular rate — NOT the reverse.
         if (pattern.gyro) {
             s.gx = le16(p + off) * gScale; off += 2;
             s.gy = le16(p + off) * gScale; off += 2;
             s.gz = le16(p + off) * gScale; off += 2;
+        }
+        if (pattern.accel) {
+            s.ax = le16(p + off) * aScale; off += 2;
+            s.ay = le16(p + off) * aScale; off += 2;
+            s.az = le16(p + off) * aScale; off += 2;
         }
         // (timestamp flag reserved for future patterns; not consumed yet)
 
