@@ -103,6 +103,8 @@ static int g_nConsumers = 0;
 // on-device bring-up confirm which FIFO field carries the accelerometer (gravity
 // ~1 g at rest) vs the gyro (~0 at rest) after the gyro-first decode fix.
 static ImuSample g_lastSample;
+// Count of samples decoded since the last DEBUG report (0 => FIFO read empty).
+static uint32_t g_samplesDrained = 0;
 
 static void addConsumer(SampleConsumer* c) {
     if (c && g_nConsumers < kMaxConsumers) g_consumers[g_nConsumers++] = c;
@@ -121,6 +123,7 @@ static void drainFifo(uint8_t* fifoBuf, ImuSample* samples, float& tsBase) {
             }
         }
         if (n > 0) g_lastSample = samples[n - 1];
+        g_samplesDrained += static_cast<uint32_t>(n);
     }
 }
 
@@ -359,7 +362,19 @@ void loop() {
         Serial.print(" g(x,y,z)=");
         Serial.print(g_lastSample.gx, 1); Serial.print(",");
         Serial.print(g_lastSample.gy, 1); Serial.print(",");
-        Serial.println(g_lastSample.gz, 1);
+        Serial.print(g_lastSample.gz, 1);
+        // Raw register state: confirm our initFifo writes landed (XL=84, G=8C,
+        // F3=09, F5=06) and whether the FIFO is actually filling (ST1 low 6 bits
+        // = unread words) or erroring (ST2). C3 shows IF_INC/BDU.
+        Serial.print(" | XL=");  Serial.print(imu.debugReadReg(0x10), HEX);
+        Serial.print(" G=");   Serial.print(imu.debugReadReg(0x11), HEX);
+        Serial.print(" F3=");  Serial.print(imu.debugReadReg(0x09), HEX);
+        Serial.print(" F5=");  Serial.print(imu.debugReadReg(0x0B), HEX);
+        Serial.print(" C3=");  Serial.print(imu.debugReadReg(0x12), HEX);
+        Serial.print(" ST1="); Serial.print(imu.debugReadReg(0x3A), HEX);
+        Serial.print(" ST2="); Serial.print(imu.debugReadReg(0x3B), HEX);
+        Serial.print(" drained="); Serial.println(g_samplesDrained);
+        g_samplesDrained = 0;
 #endif
 
 #if defined(COM_MODE_BLE)

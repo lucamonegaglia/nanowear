@@ -55,6 +55,9 @@ public:
     float samplePeriodMs() const { return dtMs_; }
     const FifoPattern& fifoPattern() const { return fifoPattern_; }
 
+    // Debug accessor for on-device FIFO bring-up: read any register.
+    uint8_t debugReadReg(uint8_t reg) { return readRegister(reg); }
+
 private:
     // Write a single byte to an IMU register over I2C. Returns true on ACK.
     bool writeRegister(uint8_t reg, uint8_t value);
