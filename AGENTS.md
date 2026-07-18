@@ -102,6 +102,48 @@ claim the board before touching it, keep hardware behind the `IMUSensor`
 interface, and small reviewable PRs. Full list in *Agentic development
 practices* (CONTRIBUTING.md).
 
+### Per-branch context summary (`context_summary.md`)
+
+The context window is small and agents run sequentially on the same task, so
+each branch / worktree keeps a **`context_summary.md`** at its root as a running
+memory shared by every agent that works on that task. Rules:
+
+- **Write only what is verified and load-bearing for this task/feature.** No
+  speculation, no unverified guesses, no raw log dumps. Capture findings a
+  future agent can act on without re-deriving them.
+- **Evict or correct stale info.** If something previously written turns out to
+  be wrong, inaccurate, misleading, or no longer relevant, edit it out or fix
+  it — the file is a living summary, not an append-only log.
+- **Read it first, update it last.** At the start of a session read
+  `context_summary.md` (if present) before exploring; before finishing, write
+  back any new verified facts so the next agent starts warm.
+- **Never commits to the main repo.** This file is local to the branch/worktree
+  and must not land in a PR. Add `context_summary.md` (and `**/context_summary.md`)
+  to `.gitignore` so it is never staged or pushed.
+
+### Main session as orchestrator — delegate aggressively
+
+The main (user-facing) session's **context window is the scarcest, most
+protected resource**. Token spend and wall-clock time are *not* constraints —
+only context is. Operate accordingly:
+
+- **The main agent is a manager, not a doer.** Its job is to plan, assign,
+  integrate, and verify — not to read every file or write every line itself.
+- **Retrieve via subagents.** Use the Agent tool for broad searches, log trawls,
+  and reading many files; keep only the conclusion in the main context, not the
+  raw dumps. Prefer an Explore / general-purpose agent over doing the sweep
+  inline.
+- **Implement and test via subagents / workflows.** Delegate code
+  implementation and test execution to subagents, and for large multi-step work
+  use the Workflow tool, so the main context stays lean. The main agent
+  integrates the returned result rather than doing the work in-window.
+- **Protect context over saving tokens or time.** When in doubt, spawn an agent
+  rather than pulling more material into the main window.
+
+This pairs with `context_summary.md`: agents that run a task write verified
+findings there so the orchestrator and later agents start warm without
+re-deriving everything.
+
 ## Agent operating rules (hard requirements)
 
 ### Open PRs only through `/open-pr` — never `gh pr create` directly
