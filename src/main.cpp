@@ -373,6 +373,21 @@ void loop() {
         Serial.print(" C3=");  Serial.print(imu.debugReadReg(0x12), HEX);
         Serial.print(" ST1="); Serial.print(imu.debugReadReg(0x3A), HEX);
         Serial.print(" ST2="); Serial.print(imu.debugReadReg(0x3B), HEX);
+        // Raw data-ready OUT registers (little-endian 16-bit): if these are
+        // non-zero the sensor IS sampling but the FIFO feed is broken; if they
+        // are 0 the sensor itself isn't producing data (ODR/power issue).
+        auto rd16 = [&](uint8_t lo) -> int16_t {
+            uint8_t l = imu.debugReadReg(lo);
+            uint8_t h = imu.debugReadReg(lo + 1);
+            return static_cast<int16_t>(static_cast<uint16_t>(l) |
+                                        (static_cast<uint16_t>(h) << 8));
+        };
+        int16_t axR = rd16(0x28), ayR = rd16(0x2A), azR = rd16(0x2C);
+        int16_t gxR = rd16(0x22), gyR = rd16(0x24), gzR = rd16(0x26);
+        Serial.print(" | OUTa="); Serial.print(axR); Serial.print(",");
+        Serial.print(ayR); Serial.print(","); Serial.print(azR);
+        Serial.print(" OUTg="); Serial.print(gxR); Serial.print(",");
+        Serial.print(gyR); Serial.print(","); Serial.print(gzR);
         Serial.print(" drained="); Serial.println(g_samplesDrained);
         g_samplesDrained = 0;
 #endif
