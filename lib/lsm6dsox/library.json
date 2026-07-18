@@ -1,0 +1,9 @@
+{
+  "name": "lsm6dsox",
+  "version": "1.0.0",
+  "description": "STMicroelectronics LSM6DSOX standard-C driver (lsm6dsox_reg.c/.h), vendored for the Nano RP2040 Connect pedometer. The platform layer (Wire/I2C) is supplied by HardwareIMU in src/.",
+  "license": "BSD-3-Clause",
+  "homepage": "https://github.com/STMicroelectronics/lsm6dsox-pid",
+  "frameworks": "arduino",
+  "platforms": "raspberrypi"
+}
