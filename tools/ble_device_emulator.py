@@ -52,7 +52,7 @@ STATE = {"steps": 0, "last": 0, "last_ts": 0.0}
 
 
 def encode_rsc(steps_now: int, now: float):
-    """Match rsc_codec.h: flags=0, speed=0, cadence = spm/30."""
+    """Match rsc_codec.h: flags=0, speed=0, cadence in steps/min (as-is)."""
     cadence_spm = 0
     if STATE["last_ts"] and now > STATE["last_ts"]:
         delta = max(0, steps_now - STATE["last"])
@@ -61,7 +61,8 @@ def encode_rsc(steps_now: int, now: float):
             cadence_spm = int(delta * 60 / dt)
     STATE["last"] = steps_now
     STATE["last_ts"] = now
-    units = cadence_spm // 30
+    # SIG Instantaneous Cadence is uint8 steps/min, resolution 1 -> clamp to 255.
+    units = min(cadence_spm, 255)
     return bytes([0x00, 0x00, 0x00, units])
 
 

@@ -47,8 +47,7 @@ def decode_rsc(data: bytearray):
         return None, None, None
     flags = data[0]
     speed = struct.unpack("<H", data[1:3])[0] / 256.0  # m/s
-    cadence_units = data[3]  # 0.5 steps/sec units
-    spm = cadence_units * 30  # back to steps/min
+    spm = data[3]  # Instantaneous Cadence: uint8 steps/min, resolution 1
     return speed, spm, flags
 
 
